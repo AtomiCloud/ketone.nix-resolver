@@ -102,3 +102,111 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: env_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: env_merge_disjoint
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_merge_disjoint
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_merge_disjoint/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_merge_disjoint/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_merge_overlap
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_merge_overlap
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_merge_overlap/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_merge_overlap/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_empty_category
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_empty_category
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_empty_category/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_empty_category/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_new_category
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_new_category
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_new_category/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_new_category/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/env_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
