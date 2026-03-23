@@ -7,12 +7,12 @@
 
 ## Objective
 
-Build a CyanPrint resolver that merges multiple Nix module files when different templates contribute the same file path. The resolver handles 5 specific Nix file types, each with a distinct merge strategy. It uses convention-based string parsing (no Nix AST evaluation).
+Build a CyanPrint resolver that merges multiple Nix module files when different templates contribute the same file path. The resolver handles 6 specific file types, each with a distinct merge strategy. It uses convention-based string parsing (no Nix AST evaluation).
 
 ## Scope
 
 ### In Scope
-- Merge logic for 5 Nix file types: `env.nix`, `fmt.nix`, `packages.nix`, `shells.nix`, `pre-commit.nix`
+- Merge logic for 6 file types: `flake.nix`, `env.nix`, `fmt.nix`, `packages.nix`, `shells.nix`, `pre-commit.nix`
 - Input validation and descriptive error messages
 - Commutativity guarantees (identical output regardless of input order)
 - Comprehensive test suite covering all merge strategies and edge cases
@@ -31,6 +31,7 @@ Build a CyanPrint resolver that merges multiple Nix module files when different 
 - Files are sorted by `(layer ASC, template ASC)` before processing
 
 ### Module Organization (under `cyan/src/`)
+- `merge-flake.ts` — flake.nix parser and merger
 - `merge-env.ts` — env.nix parser and merger
 - `merge-fmt.ts` — fmt.nix parser and merger
 - `merge-packages.ts` — packages.nix parser and merger
@@ -38,13 +39,86 @@ Build a CyanPrint resolver that merges multiple Nix module files when different 
 - `merge-precommit.ts` — pre-commit.nix parser and merger
 
 ### Dispatch Logic
+
+The engine matches files via a glob configured in templates (e.g., `**/*.nix`). The resolver receives all conflicting files at the same path and dispatches based on basename:
+
 ```typescript
-// Determine file type from path basename
-// e.g., "nix/env.nix" → "env", "nix/fmt.nix" → "fmt"
-// Route to appropriate merge function
+// "flake.nix"      → merge-flake
+// "env.nix"        → merge-env
+// "fmt.nix"        → merge-fmt
+// "packages.nix"   → merge-packages
+// "shells.nix"     → merge-shells
+// "pre-commit.nix" → merge-precommit
+// anything else    → throw Error (unsupported file type)
 ```
 
 ## Merge Strategies (per file type)
+
+### 0. flake.nix — Structured Partial Merge
+
+**Structure:**
+```nix
+{
+  description = "var__platform__ var__service__";
+  inputs = {
+    # util
+    flake-utils.url = "github:numtide/flake-utils";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    pre-commit-hooks.url = "github:cachix/pre-commit-hooks.nix";
+
+    # registry
+    nixpkgs-unstable.url = "nixpkgs/nixos-unstable";
+    atomipkgs.url = "github:AtomiCloud/nix-registry/v2";
+  };
+  outputs =
+    { self
+
+      # utils
+    , flake-utils
+    , treefmt-nix
+    , pre-commit-hooks
+
+      # registries
+    , atomipkgs
+    , nixpkgs-unstable
+
+    } @inputs:
+    (flake-utils.lib.eachDefaultSystem
+      (system:
+      let
+        pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
+        atomi = atomipkgs.packages.${system};
+        pre-commit-lib = pre-commit-hooks.lib.${system};
+      in
+      let pkgs = pkgs-2511; in
+      with rec {
+        packages = import ./nix/packages.nix {
+            inherit pkgs pkgs-2511 pkgs-unstable atomi;
+        };
+        ...
+      };
+      {
+        inherit checks formatter packages devShells;
+      })
+    );
+}
+```
+
+**Merge strategy — two distinct modes:**
+
+**Merge (concat + dedupe by name):**
+- `inputs` entries — concat all `name.url = "...";` entries, dedupe by input name (LWW if same name with different URL)
+- Output params (`{ self, flake-utils, ... }`) — concat all param names, dedupe, sort within comment groups (`# utils`, `# registries`)
+- Registry setup lines (`pkgs-* = ...;`) — concat, dedupe by LHS name (LWW if same name with different expression)
+- `inherit` parts inside import calls — concat all identifiers, dedupe, sort
+
+**LWW (highest layer wins):**
+- `description`
+- `let pkgs = pkgs-2511; in` aliasing lines
+- The `with rec { ... };` block structure (imports of pre-commit, formatter, packages, env, devShells, checks) — **except** the `packages` segment's `inherit` identifiers
+- `packages` segment's `inherit` identifiers: concat + dedupe, sort
+- Final output block (`{ inherit checks formatter packages devShells; }`)
+- Everything else not explicitly listed as merge
 
 ### 1. env.nix — Package Category Merge
 
@@ -73,7 +147,7 @@ Build a CyanPrint resolver that merges multiple Nix module files when different 
 - `src`: highest layer wins
 - `hooks`: deep merge per hook key
 - `enable` (boolean): `true` wins
-- Arrays (`excludes`, `stages`): highest layer wins
+- Arrays (`excludes`, `stages`): concat + dedupe
 - String fields (`name`, `entry`, `files`, `language`): highest layer wins
 - Unknown fields: passthrough, highest layer wins
 
@@ -116,14 +190,20 @@ Build a CyanPrint resolver that merges multiple Nix module files when different 
 ## Acceptance Criteria
 
 ### Core Functionality
-- [ ] Single file input → passthrough (all 5 file types)
+- [ ] Single file input → passthrough (all 6 file types)
+- [ ] flake.nix: inputs merge (concat + dedupe by name)
+- [ ] flake.nix: output params merge (concat + dedupe)
+- [ ] flake.nix: registry setup merge (concat + dedupe)
+- [ ] flake.nix: inherit parts merge (concat + dedupe)
+- [ ] flake.nix: `let pkgs = ...; in` LWW
+- [ ] flake.nix: everything else LWW
 - [ ] env.nix: merge categories across multiple inputs, dedupe + sort
 - [ ] env.nix: function args mismatch → error
 - [ ] fmt.nix: deep merge programs (single-line and multi-line forms)
 - [ ] fmt.nix: `enable = true` wins over `enable = false`
 - [ ] fmt.nix: extra_args LWW (highest layer wins)
 - [ ] pre-commit.nix: deep merge hooks per key
-- [ ] pre-commit.nix: arrays LWW, strings LWW
+- [ ] pre-commit.nix: arrays concat+dedupe, strings LWW
 - [ ] shells.nix: buildInputs concat + dedupe per shell
 - [ ] shells.nix: different shells from different inputs → all included
 - [ ] packages.nix: sub-blocks merge (inherit concat, assignments LWW)
@@ -139,13 +219,19 @@ Build a CyanPrint resolver that merges multiple Nix module files when different 
 
 ## Pretty-Print Output Format
 
-All resolved output must follow the formatting conventions observed in the real zinc nix files (`/Users/erng/Workspace/atomi/runbook/platforms/alcohol/zinc/nix/`). Key rules:
+All resolved output must follow the formatting conventions observed in the real zinc nix files. Reference: `/Users/erng/Workspace/atomi/runbook/platforms/alcohol/zinc/nix/` and `/Users/erng/Workspace/atomi/runbook/platforms/alcohol/zinc/flake.nix`.
 
 ### General
 - 2-space indentation throughout
 - Blank line between major sections (categories in env.nix, programs in fmt.nix, hooks in pre-commit.nix, sub-blocks in packages.nix)
 - Trailing newline at end of file
-- No trailing semicolons on single-line assignments in attrsets (e.g., `nixpkgs-fmt.enable = true` — no `;`)
+
+### flake.nix
+- 2-space indent
+- Inputs grouped by comment headers (`# util`, `# registry`)
+- Output params grouped by comment headers, sorted alphabetically within groups
+- Registry setup lines sorted alphabetically
+- Blank lines between logical sections
 
 ### env.nix
 - `with packages;` on the line after function args
@@ -155,7 +241,7 @@ All resolved output must follow the formatting conventions observed in the real 
 ### fmt.nix
 - `let fmt = {` on separate lines with 2-space indent
 - `projectRootFile` and `programs` separated by blank line
-- Single-line programs: `program-name.enable = true;` (no trailing `;` on the semicolon — wait, actually `enable = true;` does have a semicolon)
+- Single-line programs: `program-name.enable = true;`
 - Multi-line programs: full attrset with 2-space indent
 
 ### packages.nix
