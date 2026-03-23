@@ -10,3 +10,95 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: flake_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: flake_merge_diff_registries
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_diff_registries
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_diff_registries/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_diff_registries/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_merge_same_registry_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_same_registry_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_same_registry_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_same_registry_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_merge_pkgs_alias_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_pkgs_alias_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_pkgs_alias_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_pkgs_alias_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/flake_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
