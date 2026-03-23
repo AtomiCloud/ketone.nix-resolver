@@ -1,0 +1,18 @@
+username: atomi
+name: nix
+description: AtomiCloud's nix merger
+project: https://github.com/AtomiCloud/ketone.nix-resolver
+source: https://github.com/AtomiCloud/ketone.nix-resolver
+email: ernest@atomi.cloud
+tags: ["atomi","nix"]
+readme: README.MD
+build:
+  registry: ${DOMAIN:-docker.io}/${GITHUB_REPO_REF:-atomi}
+  platforms:
+    - linux/amd64
+    - linux/arm64
+  images:
+    resolver:
+      image: nix
+      dockerfile: Dockerfile
+      context: .
