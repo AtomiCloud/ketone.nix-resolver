@@ -46,7 +46,7 @@ function parseEnv(content: string): ParsedEnv {
     if (trimmed === '}') break;
 
     // Category assignment: key = [
-    const catMatch = trimmed.match(/^(\w+)\s*=\s*\[/);
+    const catMatch = trimmed.match(/^([\w-]+)\s*=\s*\[/);
     if (catMatch) {
       currentCategory = catMatch[1];
       categories.set(currentCategory, []);

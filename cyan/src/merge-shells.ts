@@ -137,6 +137,9 @@ function parseShells(content: string): ParsedShells {
 export function mergeShells(
   sortedFiles: { content: string; layer: number; template: string }[],
 ): string {
+  if (sortedFiles.length === 0) {
+    throw new Error('shells.nix merge requires at least one input file');
+  }
   const parsed = sortedFiles.map((f) => parseShells(f.content));
 
   // Function args: exact match — fail if different
@@ -211,7 +214,7 @@ function prettyPrint(
     }
 
     lines.push(`  ${shellName} = pkgs.mkShell {`);
-    lines.push(`    buildInputs = ${buildInputs.join(' ++ ')};`);
+    lines.push(`    buildInputs = ${buildInputs.length === 0 ? '[]' : buildInputs.join(' ++ ')};`);
     if (hasShellHook) {
       lines.push('    inherit shellHook;');
     }

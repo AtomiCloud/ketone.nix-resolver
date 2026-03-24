@@ -346,7 +346,9 @@ export function mergeFlake(
   // Include pkgs alias if any template defines it — needed because
   // packages inherit IDs are unioned across templates and may reference pkgs
   // even if the highest-layer template does not define the alias.
-  const pkgsAlias = parsed.find((p) => p.pkgsAlias)?.pkgsAlias ?? null;
+  // Use last non-null (highest layer) for LWW consistency.
+  const pkgsAliases = parsed.flatMap((p) => (p.pkgsAlias ? [p.pkgsAlias] : []));
+  const pkgsAlias = pkgsAliases[pkgsAliases.length - 1] ?? null;
 
   // LWW for with rec assignments, but merge packages inherit identifiers
   const highestLayer = parsed[parsed.length - 1];

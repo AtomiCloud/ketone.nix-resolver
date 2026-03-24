@@ -496,8 +496,10 @@ function prettyPrint(
 
       // Fields in order: description, entry, excludes, files, language, name, package, pass_filenames, stages
       const fieldOrder = ['description', 'entry', 'excludes', 'files', 'language', 'name', 'package', 'pass_filenames', 'stages'];
+      const emittedKeys = new Set<string>(['enable']);
 
       for (const key of fieldOrder) {
+        emittedKeys.add(key);
         if (key === 'excludes' && config.excludes) {
           lines.push(`      excludes = [`);
           for (const ex of config.excludes) {
@@ -522,6 +524,22 @@ function prettyPrint(
           } else if (typeof value === 'boolean') {
             lines.push(`      ${key} = ${value};`);
           }
+        }
+      }
+
+      // Emit passthrough fields (non-standard hook options from highest layer)
+      for (const key of Object.keys(config).sort()) {
+        if (emittedKeys.has(key)) continue;
+        const value = config[key];
+        if (value === undefined) continue;
+        if (typeof value === 'string') {
+          if (needsQuotes(key, value)) {
+            lines.push(`      ${key} = "${value}";`);
+          } else {
+            lines.push(`      ${key} = ${value};`);
+          }
+        } else if (typeof value === 'boolean') {
+          lines.push(`      ${key} = ${value};`);
         }
       }
 

@@ -498,7 +498,7 @@ function prettyPrint(
     }
 
     // Separate assignments from inherits
-    const assignments = block.entries.filter((e) => e.type === 'assignment');
+    const assignments = block.entries.filter((e) => e.type === 'assignment').sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
     const inherits = block.entries.filter((e) => e.type === 'inherit');
 
     // Collect inherit identifiers (deduplicated by id, sorted)

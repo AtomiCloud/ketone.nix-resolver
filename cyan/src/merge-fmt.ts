@@ -190,8 +190,9 @@ function parsePrograms(blockContent: string): Map<string, ProgramConfig> {
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // Skip empty lines and closing brace
-    if (!trimmed || trimmed === '}') {
+    // Skip empty lines; finalize program on closing brace
+    if (!trimmed) continue;
+    if (trimmed === '}') {
       if (currentProgram && currentConfig) {
         programs.set(currentProgram, currentConfig);
         currentProgram = null;
@@ -401,7 +402,7 @@ function prettyPrint(
 
     // Determine if this is a single-line or multi-line program
     const isSingleLine = Object.keys(config).length === 1 && config.enable === true;
-    const otherKeys = Object.entries(config).filter(([k]) => k !== 'enable');
+    const otherKeys = Object.entries(config).filter(([k]) => k !== 'enable').sort(([a], [b]) => a.localeCompare(b));
 
     if (isSingleLine) {
       lines.push(`      ${name}.enable = true;`);
