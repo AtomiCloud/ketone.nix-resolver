@@ -35,12 +35,70 @@ function findMatching(text: string, openChar: string, closeChar: string, openIdx
   let depth = 1;
   let i = openIdx + 1;
   while (i < text.length && depth > 0) {
+    const skipped = skipLexical(text, i);
+    if (skipped !== i) { i = skipped; continue; }
     if (text[i] === openChar) depth++;
     else if (text[i] === closeChar) depth--;
     if (depth === 0) return i;
     i++;
   }
   return -1;
+}
+
+/** Skip past a Nix string literal or comment starting at `pos`.
+ *  Returns position after the construct, or `pos` if not a string/comment. */
+function skipLexical(text: string, pos: number): number {
+  if (pos >= text.length) return pos;
+  const ch = text[pos];
+
+  // Line comment: # to end of line
+  if (ch === '#') {
+    let i = pos;
+    while (i < text.length && text[i] !== '\n') i++;
+    return i;
+  }
+
+  // Double-quoted string
+  if (ch === '"') {
+    let i = pos + 1;
+    while (i < text.length) {
+      if (text[i] === '\\') { i += 2; continue; }
+      if (text[i] === '"') return i + 1;
+      i++;
+    }
+    return text.length;
+  }
+
+  // Indented string ''...''
+  if (ch === "'" && pos + 1 < text.length && text[pos + 1] === "'") {
+    let i = pos + 2;
+    while (i < text.length) {
+      // ${...} interpolation — skip to matching }
+      if (text[i] === '$' && i + 1 < text.length && text[i + 1] === '{') {
+        i += 2;
+        let depth = 1;
+        while (i < text.length && depth > 0) {
+          if (text[i] === '{') depth++;
+          else if (text[i] === '}') depth--;
+          i++;
+        }
+        continue;
+      }
+      // ''' — escaped single quote inside indented string
+      if (text[i] === "'" && i + 2 < text.length && text[i + 1] === "'" && text[i + 2] === "'") {
+        i += 3;
+        continue;
+      }
+      // '' — end of indented string
+      if (text[i] === "'" && i + 1 < text.length && text[i + 1] === "'") {
+        return i + 2;
+      }
+      i++;
+    }
+    return text.length;
+  }
+
+  return pos;
 }
 
 // ─── Parse ───────────────────────────────────────────────────────────────────
@@ -118,8 +176,13 @@ function parseSubBlocks(outerBody: string, subBlocks: Map<string, SubBlock>) {
   let pos = 0;
 
   while (pos < outerBody.length) {
-    // Skip whitespace/newlines
-    while (pos < outerBody.length && /\s/.test(outerBody[pos])) pos++;
+    // Skip whitespace/newlines and comments
+    while (pos < outerBody.length) {
+      if (/\s/.test(outerBody[pos])) { pos++; continue; }
+      const skipped = skipLexical(outerBody, pos);
+      if (skipped !== pos) { pos = skipped; continue; }
+      break;
+    }
     if (pos >= outerBody.length) break;
 
     // Try to match: name = (
@@ -192,12 +255,17 @@ function parseEntries(innerBody: string, entries: SubBlockEntry[]) {
   let pendingComment: string | undefined;
 
   while (pos < innerBody.length) {
-    // Skip whitespace
-    while (pos < innerBody.length && /\s/.test(innerBody[pos])) pos++;
+    // Skip whitespace and comments
+    while (pos < innerBody.length) {
+      if (/\s/.test(innerBody[pos])) { pos++; continue; }
+      const skipped = skipLexical(innerBody, pos);
+      if (skipped !== pos) { pos = skipped; continue; }
+      break;
+    }
     if (pos >= innerBody.length) break;
 
     // Try to match 'inherit' keyword
-    if (innerBody.slice(pos).startsWith('inherit')) {
+    if (/^inherit(?=[\s;}])/.test(innerBody.slice(pos))) {
       pos += 7;
 
       // Check if multi-line inherit (next non-whitespace is an identifier, not followed by ; on same line)
@@ -274,6 +342,8 @@ function parseEntries(innerBody: string, entries: SubBlockEntry[]) {
       let depth = 0;
 
       while (pos < innerBody.length) {
+        const skipped = skipLexical(innerBody, pos);
+        if (skipped !== pos) { pos = skipped; continue; }
         const ch = innerBody[pos];
         if (ch === '{' || ch === '(') depth++;
         else if (ch === '}' || ch === ')') {
@@ -334,7 +404,17 @@ export function mergePackages(
 
       const existing = mergedBlocks.get(name)!;
 
-      // withRegistry: first non-null wins
+      // withRegistry: reject conflicting registries to preserve commutativity
+      if (
+        block.withRegistry !== null &&
+        existing.withRegistry !== null &&
+        existing.withRegistry !== block.withRegistry
+      ) {
+        throw new Error(
+          `Cannot merge sub-block "${name}" with conflicting registries: ` +
+          `${existing.withRegistry} vs ${block.withRegistry}`,
+        );
+      }
       if (block.withRegistry !== null && existing.withRegistry === null) {
         existing.withRegistry = block.withRegistry;
       }
