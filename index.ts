@@ -4,6 +4,7 @@ import { mergeEnv } from './cyan/src/merge-env.ts';
 import { mergeFmt } from './cyan/src/merge-fmt.ts';
 import { mergePrecommit } from './cyan/src/merge-precommit.ts';
 import { mergePackages } from './cyan/src/merge-packages.ts';
+import { mergeShells } from './cyan/src/merge-shells.ts';
 
 type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
 
@@ -14,7 +15,7 @@ const MERGERS: Record<string, MergeFn> = {
   'nix/env.nix': mergeEnv,
   'nix/fmt.nix': mergeFmt,
   'nix/packages.nix': mergePackages,
-  'nix/shells.nix': LWW,
+  'nix/shells.nix': mergeShells,
   'nix/pre-commit.nix': mergePrecommit,
 };
 
