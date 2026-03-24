@@ -27,6 +27,7 @@
         let
           atomi = atomipkgs.packages.${system};
           pkgs-2511 = nixpkgs-2511.legacyPackages.${system};
+          pkgs = pkgs-2511;
         in
         
         with rec {

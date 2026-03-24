@@ -204,7 +204,7 @@ function parseEntries(innerBody: string, entries: SubBlockEntry[]) {
       // or single-line inherit (identifiers followed by ; on same line)
       // Skip whitespace after 'inherit'
       let wsEnd = pos;
-      while (wsEnd < innerBody.length && innerBody[wsEnd] === ' ' || innerBody[wsEnd] === '\t') wsEnd++;
+      while (wsEnd < innerBody.length && (innerBody[wsEnd] === ' ' || innerBody[wsEnd] === '\t')) wsEnd++;
 
       // Look ahead: if we find a ; before any newline, it's single-line
       let semiPos = -1;

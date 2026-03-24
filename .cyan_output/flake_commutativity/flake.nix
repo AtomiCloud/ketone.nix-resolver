@@ -27,6 +27,7 @@
         let
           pkgs-2511 = nixpkgs-2511.legacyPackages.${system};
           pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
+          pkgs = pkgs-2511;
         in
         
         with rec {

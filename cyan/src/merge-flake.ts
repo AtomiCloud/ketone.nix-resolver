@@ -343,8 +343,10 @@ export function mergeFlake(
   // Merge registry lines
   const mergedRegistries = mergeRegistryLines(parsed);
 
-  // LWW for pkgs alias
-  const pkgsAlias = parsed[parsed.length - 1].pkgsAlias;
+  // Include pkgs alias if any template defines it — needed because
+  // packages inherit IDs are unioned across templates and may reference pkgs
+  // even if the highest-layer template does not define the alias.
+  const pkgsAlias = parsed.find((p) => p.pkgsAlias)?.pkgsAlias ?? null;
 
   // LWW for with rec assignments, but merge packages inherit identifiers
   const highestLayer = parsed[parsed.length - 1];
