@@ -210,3 +210,111 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: fmt_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: fmt_merge_diff_programs
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_merge_diff_programs
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_merge_diff_programs/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_merge_diff_programs/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_merge_single_multi
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_merge_single_multi
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_merge_single_multi/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_merge_single_multi/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_conflicting_enable
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_conflicting_enable
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_conflicting_enable/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_conflicting_enable/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_extra_args_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_extra_args_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_extra_args_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_extra_args_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/fmt_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0

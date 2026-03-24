@@ -1,6 +1,7 @@
 import { type ResolverOutput, StartResolverWithLambda, type ResolverInput } from '@atomicloud/cyan-sdk';
 import { mergeFlake } from './cyan/src/merge-flake.ts';
 import { mergeEnv } from './cyan/src/merge-env.ts';
+import { mergeFmt } from './cyan/src/merge-fmt.ts';
 
 type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
 
@@ -9,7 +10,7 @@ const LWW: MergeFn = (sortedFiles) => sortedFiles[sortedFiles.length - 1].conten
 const MERGERS: Record<string, MergeFn> = {
   'flake.nix': mergeFlake,
   'nix/env.nix': mergeEnv,
-  'nix/fmt.nix': LWW,
+  'nix/fmt.nix': mergeFmt,
   'nix/packages.nix': LWW,
   'nix/shells.nix': LWW,
   'nix/pre-commit.nix': LWW,
