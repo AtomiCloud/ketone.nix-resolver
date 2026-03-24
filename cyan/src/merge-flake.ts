@@ -230,19 +230,21 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
       else if (char === '}') {
         depth--;
         if (depth < 0) {
-          // End of with rec block - strip trailing } and whitespace from body
-          currentBody = currentBody.replace(/\s*}\s*$/, '').trim();
+          // End of with rec block or stray } — trim whitespace only,
+          // do not strip } from the body as it may belong to attrset syntax.
+          currentBody = currentBody.trim();
           break;
         }
       }
       currentBody += char;
       // Assignment ends with ; at depth 0
       if (char === ';' && depth === 0) {
-        // Strip trailing semicolon and closing brace - handle both }; and }; order
+        // Only strip the trailing ; (assignment terminator).
+        // Do NOT strip } — it belongs to attrset/function-call syntax
+        // (e.g. "import ./nix/packages.nix { inherit pkgs; }") and must be
+        // preserved so that formatAssignmentBody can render it correctly.
         let body = currentBody.trim();
-        body = body.replace(/(\s*;\s*}\s*$|\s*}\s*;\s*$)/, ''); // strip }; or };
-        body = body.replace(/\s*}\s*$/, ''); // strip any remaining }
-        body = body.replace(/\s*;\s*$/, ''); // strip any remaining ;
+        body = body.replace(/\s*;\s*$/, '');
         assignments.push({
           name: currentName.trim(),
           body,
@@ -257,9 +259,8 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
 
   // Handle last assignment without trailing semicolon check
   if (currentName.trim() && currentBody.trim()) {
+    // Only strip trailing ; (assignment terminator), not }
     let body = currentBody.trim();
-    body = body.replace(/(\s*;\s*}\s*$|\s*}\s*;\s*$)/, ''); // strip }; or };
-    body = body.replace(/\s*}\s*$/, '');
     body = body.replace(/\s*;\s*$/, '');
     assignments.push({
       name: currentName.trim(),

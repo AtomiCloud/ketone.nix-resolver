@@ -174,7 +174,8 @@ export function mergeShells(
     }
   }
 
-  return prettyPrint(parsed[0].functionArgs, firstWithEnv, mergedShells);
+  const hasShellHook = parsed[0].functionArgs.includes('shellHook');
+  return prettyPrint(parsed[0].functionArgs, firstWithEnv, mergedShells, hasShellHook);
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
@@ -183,6 +184,7 @@ function prettyPrint(
   functionArgs: string[],
   withEnv: boolean,
   shells: Map<string, Set<string>>,
+  hasShellHook: boolean,
 ): string {
   const lines: string[] = [];
 
@@ -210,7 +212,9 @@ function prettyPrint(
 
     lines.push(`  ${shellName} = pkgs.mkShell {`);
     lines.push(`    buildInputs = ${buildInputs.join(' ++ ')};`);
-    lines.push('    inherit shellHook;');
+    if (hasShellHook) {
+      lines.push('    inherit shellHook;');
+    }
     lines.push('  };');
   }
 

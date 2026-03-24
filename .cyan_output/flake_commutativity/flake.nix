@@ -32,7 +32,8 @@
         with rec {
           packages = import ./nix/packages.nix
             {
-              inherit pkgs-unstable;
+              inherit pkgs pkgs-2511 pkgs-unstable;
+            };
         };
         {
           inherit packages;

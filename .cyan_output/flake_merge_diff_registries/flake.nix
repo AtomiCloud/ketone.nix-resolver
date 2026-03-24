@@ -39,11 +39,14 @@
         with rec {
           packages = import ./nix/packages.nix
             {
-              inherit pkgs-unstable;
+              inherit atomi pkgs pkgs-2511 pkgs-unstable;
+            };
           env = import ./nix/env.nix {
             inherit pkgs packages;
+          };
           devShells = import ./nix/shells.nix {
             inherit pkgs env packages;
+          };
         };
         {
           inherit packages devShells;

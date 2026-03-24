@@ -513,9 +513,10 @@ function formatAssignmentValue(name: string, value: string): string[] {
 
   // Multi-line value
   const valueLines = trimmed.split('\n');
-  const result: string[] = [`${name} = ${valueLines[0]};`];
-  for (let i = 1; i < valueLines.length; i++) {
+  const result: string[] = [`${name} = ${valueLines[0]}`];
+  for (let i = 1; i < valueLines.length - 1; i++) {
     result.push(valueLines[i]);
   }
+  result.push(`${valueLines[valueLines.length - 1]};`);
   return result;
 }

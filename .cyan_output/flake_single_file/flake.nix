@@ -41,17 +41,22 @@
         with rec {
           pre-commit = import ./nix/pre-commit.nix {
             inherit packages pre-commit-lib formatter;
+          };
           formatter = import ./nix/fmt.nix {
             inherit treefmt-nix pkgs;
+          };
           packages = import ./nix/packages.nix
             {
-              inherit pkgs atomi pkgs-2511 pkgs-unstable;
+              inherit atomi pkgs pkgs-2511 pkgs-unstable;
+            };
           env = import ./nix/env.nix {
             inherit pkgs packages;
+          };
           devShells = import ./nix/shells.nix {
             inherit pkgs env packages;
             shellHook = checks.pre-commit-check.shellHook;
-          checks = { pre-commit-check = pre-commit; format = formatte; };
+          };
+          checks = { pre-commit-check = pre-commit; format = formatter; };
         };
         {
           inherit checks formatter packages devShells;

@@ -31,6 +31,7 @@
           packages = import ./nix/packages.nix
             {
               inherit pkgs pkgs-2511;
+            };
         };
         {
           inherit packages;

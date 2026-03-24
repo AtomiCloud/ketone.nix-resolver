@@ -32,7 +32,8 @@
         with rec {
           packages = import ./nix/packages.nix
             {
-              inherit pkgs-2511;
+              inherit atomi pkgs pkgs-2511;
+            };
         };
         {
           inherit packages;
