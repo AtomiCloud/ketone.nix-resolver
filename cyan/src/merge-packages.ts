@@ -258,6 +258,13 @@ function parseEntries(innerBody: string, entries: SubBlockEntry[]) {
     // Skip whitespace and comments
     while (pos < innerBody.length) {
       if (/\s/.test(innerBody[pos])) { pos++; continue; }
+      if (innerBody[pos] === '#') {
+        // Capture line comment before skipping
+        const lineEnd = innerBody.indexOf('\n', pos);
+        pendingComment = innerBody.slice(pos, lineEnd === -1 ? innerBody.length : lineEnd).trim();
+        pos = lineEnd === -1 ? innerBody.length : lineEnd + 1;
+        continue;
+      }
       const skipped = skipLexical(innerBody, pos);
       if (skipped !== pos) { pos = skipped; continue; }
       break;

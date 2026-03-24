@@ -191,8 +191,10 @@ function prettyPrint(
 ): string {
   const lines: string[] = [];
 
-  // Function args sorted alphabetically
-  const sortedArgs = [...functionArgs].sort();
+  // Function args sorted alphabetically, with "..." at the end
+  const rest = functionArgs.filter((a) => a === '...');
+  const namedArgs = functionArgs.filter((a) => a !== '...').sort();
+  const sortedArgs = [...namedArgs, ...rest];
   lines.push(`{ ${sortedArgs.join(', ')} }:`);
   if (withEnv) {
     lines.push('with env;');

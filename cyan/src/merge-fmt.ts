@@ -312,18 +312,46 @@ export function mergeFmt(
 
     if (depth === 0) {
       const fmtBlock = content.slice(fmtMatch.index!, j);
-      // Find all top-level keys in the fmt block (before programs = {)
-      // Skip the first line which is "fmt = {"
-      const beforePrograms = fmtBlock.split(/programs\s*=\s*\{/)[0];
-      const linesBeforePrograms = beforePrograms.split('\n');
-      // Skip first line (fmt = {) and find keys
-      const unknownKeys = [...linesBeforePrograms.slice(1).join('\n').matchAll(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=/gm)];
-      for (const match of unknownKeys) {
+      // Validate no unknown top-level keys in any section of the fmt block
+      // Split the fmt block into sections: before programs = {, inside programs, and after programs close
+      const sections = fmtBlock.split(/(programs\s*=\s*\{)/);
+      // sections[0] = before "programs = {", sections[1] = "programs = {", sections[2..] = inside+after programs
+      // Check keys before programs
+      const beforePrograms = sections[0] ?? '';
+      const linesBefore = beforePrograms.split('\n');
+      const unknownKeysBefore = [...linesBefore.slice(1).join('\n').matchAll(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=/gm)];
+      for (const match of unknownKeysBefore) {
         const key = match[1];
         if (key !== 'projectRootFile') {
           throw new Error(
             `fmt.nix: unknown top-level key "${key}" in layer ${i} (template: ${sortedFiles[i].template})`,
           );
+        }
+      }
+      // Check keys after the programs block closes (rejoin remaining sections and find top-level keys)
+      if (sections.length > 2) {
+        const afterProgramsHeader = sections.slice(2).join('');
+        // Find the end of the programs block by tracking brace depth
+        let progDepth = 1;
+        let progEnd = 0;
+        for (let k = 0; k < afterProgramsHeader.length; k++) {
+          if (afterProgramsHeader[k] === '{') progDepth++;
+          else if (afterProgramsHeader[k] === '}') {
+            progDepth--;
+            if (progDepth === 0) { progEnd = k + 1; break; }
+          }
+        }
+        if (progEnd > 0) {
+          const afterPrograms = afterProgramsHeader.slice(progEnd);
+          const unknownKeysAfter = [...afterPrograms.matchAll(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=/gm)];
+          for (const match of unknownKeysAfter) {
+            const key = match[1];
+            if (key !== 'projectRootFile') {
+              throw new Error(
+                `fmt.nix: unknown top-level key "${key}" in layer ${i} (template: ${sortedFiles[i].template})`,
+              );
+            }
+          }
         }
       }
     }

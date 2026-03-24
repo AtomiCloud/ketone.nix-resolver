@@ -216,15 +216,26 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
   let depth = 0;
   let inAssignment = false;
 
-  for (const char of body) {
+  let pos = 0;
+  while (pos < body.length) {
+    const char = body[pos];
     if (!inAssignment) {
       if (char === '=' && currentName.trim()) {
         inAssignment = true;
+        pos++;
+        continue;
+      }
+      if (char === '#') {
+        // Skip line comment to end of line
+        const nlIdx = body.indexOf('\n', pos);
+        pos = nlIdx === -1 ? body.length : nlIdx + 1;
+        currentName = '';
         continue;
       }
       if (char !== ' ' && char !== '\n' && char !== '\t' && char !== ';') {
         currentName += char;
       }
+      pos++;
     } else {
       if (char === '{') depth++;
       else if (char === '}') {
@@ -237,6 +248,7 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
         }
       }
       currentBody += char;
+      pos++;
       // Assignment ends with ; at depth 0
       if (char === ';' && depth === 0) {
         // Only strip the trailing ; (assignment terminator).

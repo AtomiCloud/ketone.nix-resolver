@@ -338,13 +338,15 @@ function parseHooks(blockContent: string): Map<string, HookConfig> {
       if (passthroughMatch) {
         const key = passthroughMatch[1];
         const value = passthroughMatch[2].trim();
-        // Only handle simple values (not complex expressions)
+        // Store passthrough fields as raw Nix expressions (preserving original syntax)
+        // Known simple types are still parsed for merge semantics
         if (value === 'true' || value === 'false') {
           (currentConfig as Record<string, unknown>)[key] = value === 'true';
         } else if (value.startsWith('"') && value.endsWith('"')) {
           (currentConfig as Record<string, unknown>)[key] = value.slice(1, -1);
         } else {
-          (currentConfig as Record<string, unknown>)[key] = value;
+          // Store raw Nix expression for unknown passthrough types
+          (currentConfig as Record<string, unknown>)[`__raw__${key}`] = value;
         }
         continue;
       }
@@ -366,12 +368,28 @@ export function mergePrecommit(
 ): string {
   const parsed = sortedFiles.map((f) => parsePrecommit(f.content));
 
-  // Function args: exact string match — fail if different
-  const firstArgs = parsed[0].functionArgs;
+  // Function args: normalize by sorting before comparing
+  function normalizeFunctionArgs(args: string): string {
+    const match = args.match(/^\{([^}]+)\}$/);
+    if (!match) return args;
+    const argList = match[1].split(',').map((a) => a.trim()).filter(Boolean);
+    // Keep "..." at the end if present
+    const restIdx = argList.indexOf('...');
+    let sorted: string[];
+    if (restIdx !== -1) {
+      const rest = argList.splice(restIdx, 1);
+      sorted = [...argList.sort(), ...rest];
+    } else {
+      sorted = argList.sort();
+    }
+    return `{ ${sorted.join(', ')} }`;
+  }
+  const firstArgs = normalizeFunctionArgs(parsed[0].functionArgs);
   for (const p of parsed) {
-    if (p.functionArgs !== firstArgs) {
+    const otherArgs = normalizeFunctionArgs(p.functionArgs);
+    if (otherArgs !== firstArgs) {
       throw new Error(
-        `pre-commit.nix function args mismatch: "${p.functionArgs}" vs "${firstArgs}"`,
+        `pre-commit.nix function args mismatch: "${otherArgs}" vs "${firstArgs}"`,
       );
     }
   }
@@ -530,6 +548,7 @@ function prettyPrint(
       // Emit passthrough fields (non-standard hook options from highest layer)
       for (const key of Object.keys(config).sort()) {
         if (emittedKeys.has(key)) continue;
+        if (key.startsWith('__raw__')) continue; // handled separately below
         const value = config[key];
         if (value === undefined) continue;
         if (typeof value === 'string') {
@@ -540,6 +559,15 @@ function prettyPrint(
           }
         } else if (typeof value === 'boolean') {
           lines.push(`      ${key} = ${value};`);
+        }
+      }
+      // Emit raw Nix passthrough fields (stored with __raw__ prefix)
+      for (const key of Object.keys(config).sort()) {
+        if (!key.startsWith('__raw__')) continue;
+        const value = config[key];
+        if (typeof value === 'string') {
+          const realKey = key.slice(7); // strip "__raw__" prefix
+          lines.push(`      ${realKey} = ${value};`);
         }
       }
 
