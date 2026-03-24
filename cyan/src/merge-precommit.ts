@@ -443,6 +443,13 @@ export function mergePrecommit(
         if (
           !['enable', 'name', 'description', 'entry', 'files', 'language', 'package', 'pass_filenames', 'excludes', 'stages'].includes(key)
         ) {
+          // Dedupe raw vs non-raw variants of the same key
+          if (key.startsWith('__raw__')) {
+            const realKey = key.slice(7);
+            delete (existing as Record<string, unknown>)[realKey];
+          } else {
+            delete (existing as Record<string, unknown>)[`__raw__${key}`];
+          }
           (existing as Record<string, unknown>)[key] = value;
         }
       }
