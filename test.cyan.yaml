@@ -426,3 +426,159 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: packages_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: packages_merge_inherit
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_inherit
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_inherit/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_inherit/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_new_subblock
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_new_subblock
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_new_subblock/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_new_subblock/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_merge_args
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_args
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_args/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_args/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_empty_subblock
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_empty_subblock
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_empty_subblock/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_empty_subblock/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_merge_line
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_line
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_line/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_line/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_comment_preserve
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_comment_preserve
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_comment_preserve/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_comment_preserve/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/packages_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0

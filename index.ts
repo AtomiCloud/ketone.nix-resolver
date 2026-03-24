@@ -3,6 +3,7 @@ import { mergeFlake } from './cyan/src/merge-flake.ts';
 import { mergeEnv } from './cyan/src/merge-env.ts';
 import { mergeFmt } from './cyan/src/merge-fmt.ts';
 import { mergePrecommit } from './cyan/src/merge-precommit.ts';
+import { mergePackages } from './cyan/src/merge-packages.ts';
 
 type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
 
@@ -12,7 +13,7 @@ const MERGERS: Record<string, MergeFn> = {
   'flake.nix': mergeFlake,
   'nix/env.nix': mergeEnv,
   'nix/fmt.nix': mergeFmt,
-  'nix/packages.nix': LWW,
+  'nix/packages.nix': mergePackages,
   'nix/shells.nix': LWW,
   'nix/pre-commit.nix': mergePrecommit,
 };
