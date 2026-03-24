@@ -10,3 +10,651 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: flake_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: flake_merge_diff_registries
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_diff_registries
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_diff_registries/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_diff_registries/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_merge_same_registry_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_same_registry_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_same_registry_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_same_registry_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_merge_pkgs_alias_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_merge_pkgs_alias_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_merge_pkgs_alias_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_merge_pkgs_alias_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/flake_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: flake_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/flake_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: env_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: env_merge_disjoint
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_merge_disjoint
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_merge_disjoint/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_merge_disjoint/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_merge_overlap
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_merge_overlap
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_merge_overlap/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_merge_overlap/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_empty_category
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_empty_category
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_empty_category/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_empty_category/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_new_category
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_new_category
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_new_category/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_new_category/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/env_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: env_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/env_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/env_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/env_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: fmt_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: fmt_merge_diff_programs
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_merge_diff_programs
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_merge_diff_programs/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_merge_diff_programs/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_merge_single_multi
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_merge_single_multi
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_merge_single_multi/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_merge_single_multi/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_conflicting_enable
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_conflicting_enable
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_conflicting_enable/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_conflicting_enable/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_extra_args_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_extra_args_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_extra_args_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_extra_args_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/fmt_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: fmt_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/fmt_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/fmt_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/fmt_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: precommit_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: precommit_merge_disjoint
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_merge_disjoint
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_merge_disjoint/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_merge_disjoint/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_merge_overlap
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_merge_overlap
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_merge_overlap/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_merge_overlap/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_conflicting_enable
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_conflicting_enable
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_conflicting_enable/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_conflicting_enable/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_rec_preserved
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_rec_preserved
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_rec_preserved/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_rec_preserved/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/precommit_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: packages_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: packages_merge_inherit
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_inherit
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_inherit/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_inherit/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_lww
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_lww
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_lww/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_lww/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_new_subblock
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_new_subblock
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_new_subblock/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_new_subblock/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_merge_args
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_args
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_args/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_args/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_empty_subblock
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_empty_subblock
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_empty_subblock/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_empty_subblock/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_merge_line
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_merge_line
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_merge_line/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_merge_line/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_comment_preserve
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_comment_preserve
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_comment_preserve/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_comment_preserve/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/packages_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: packages_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/packages_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: shells_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: shells_merge_concat
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_merge_concat
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_merge_concat/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/shells_merge_concat/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: shells_different_shells
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_different_shells
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_different_shells/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/shells_different_shells/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: shells_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/shells_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: shells_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/shells_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
