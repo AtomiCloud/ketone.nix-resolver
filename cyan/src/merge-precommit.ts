@@ -63,14 +63,24 @@ function needsQuotes(key: string, value: string): boolean {
 function parsePrecommit(content: string): ParsedPrecommit {
   const lines = content.split('\n');
 
-  // 1. Extract function args line — match ^{...}:
+  // 1. Extract function args line — match ^{...}: using balanced brace matching
   let functionArgs = '';
   let lineIdx = 0;
 
-  const argsMatch = lines[0]?.match(/^\s*(\{[^}]+\})\s*:\s*$/);
-  if (argsMatch) {
-    functionArgs = argsMatch[1];
-    lineIdx = 1;
+  const firstLine = lines[0]?.trim() ?? '';
+  if (firstLine.startsWith('{')) {
+    // Find the matching closing brace (handles nested braces)
+    let depth = 0;
+    let argEnd = -1;
+    for (let ci = 0; ci < firstLine.length; ci++) {
+      if (firstLine[ci] === '{') depth++;
+      else if (firstLine[ci] === '}') depth--;
+      if (depth === 0) { argEnd = ci; break; }
+    }
+    if (argEnd !== -1 && firstLine.slice(argEnd + 1).trim().startsWith(':')) {
+      functionArgs = firstLine.slice(0, argEnd + 1).trim();
+      lineIdx = 1;
+    }
   }
 
   // 2. Detect pre-commit-lib.run { wrapper and find hooks block
@@ -110,9 +120,9 @@ function parsePrecommit(content: string): ParsedPrecommit {
 
   // 3. Extract src value
   let src = './.';
-  const srcMatch = runBlockContent.match(/src\s*=\s*(\.\/[^;]+);/);
+  const srcMatch = runBlockContent.match(/\bsrc\s*=\s*([^;]+);/);
   if (srcMatch) {
-    src = srcMatch[1];
+    src = srcMatch[1].trim();
   }
 
   // 4. Extract hooks attrset
@@ -307,29 +317,37 @@ function parseHooks(blockContent: string): Map<string, HookConfig> {
         continue;
       }
 
-      // Multi-line excludes field (array) - starts with excludes = [
-      if (trimmed.startsWith('excludes = [')) {
-        inArrayField = 'excludes';
-        arrayContent = [];
-        // Check if there's anything on the same line after [
-        const afterBracket = trimmed.slice(trimmed.indexOf('[') + 1).trim();
-        if (afterBracket === ']') {
-          // Empty array
+      // Excludes field (array) - handle both inline and multi-line
+      const excludesInlineMatch = trimmed.match(/^excludes\s*=\s*\[(.*)\]\s*;?\s*$/);
+      if (excludesInlineMatch) {
+        const arrayContent = excludesInlineMatch[1].trim();
+        if (arrayContent) {
+          currentConfig.excludes = extractQuotedStrings(arrayContent);
+        } else {
           currentConfig.excludes = [];
-          inArrayField = null;
         }
         continue;
       }
+      if (trimmed.startsWith('excludes = [')) {
+        inArrayField = 'excludes';
+        arrayContent = [];
+        continue;
+      }
 
-      // Multi-line stages field (array)
+      // Stages field (array) - handle both inline and multi-line
+      const stagesInlineMatch = trimmed.match(/^stages\s*=\s*\[(.*)\]\s*;?\s*$/);
+      if (stagesInlineMatch) {
+        const arrayContent = stagesInlineMatch[1].trim();
+        if (arrayContent) {
+          currentConfig.stages = extractQuotedStrings(arrayContent);
+        } else {
+          currentConfig.stages = [];
+        }
+        continue;
+      }
       if (trimmed.startsWith('stages = [')) {
         inArrayField = 'stages';
         arrayContent = [];
-        const afterBracket = trimmed.slice(trimmed.indexOf('[') + 1).trim();
-        if (afterBracket === ']') {
-          currentConfig.stages = [];
-          inArrayField = null;
-        }
         continue;
       }
 
