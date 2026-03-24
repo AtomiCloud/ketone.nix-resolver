@@ -318,3 +318,111 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  - name: precommit_single_file
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_single_file
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_single_file/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: precommit_merge_disjoint
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_merge_disjoint
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_merge_disjoint/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_merge_disjoint/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_merge_overlap
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_merge_overlap
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_merge_overlap/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_merge_overlap/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_conflicting_enable
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_conflicting_enable
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_conflicting_enable/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_conflicting_enable/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_rec_preserved
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_rec_preserved
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_rec_preserved/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_rec_preserved/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_commutativity
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_commutativity_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_commutativity
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_commutativity/template-b
+        origin:
+          template: template-b
+          layer: 1
+      - path: ./inputs/precommit_commutativity/template-a
+        origin:
+          template: template-a
+          layer: 0

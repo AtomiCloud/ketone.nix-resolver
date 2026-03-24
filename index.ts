@@ -2,6 +2,7 @@ import { type ResolverOutput, StartResolverWithLambda, type ResolverInput } from
 import { mergeFlake } from './cyan/src/merge-flake.ts';
 import { mergeEnv } from './cyan/src/merge-env.ts';
 import { mergeFmt } from './cyan/src/merge-fmt.ts';
+import { mergePrecommit } from './cyan/src/merge-precommit.ts';
 
 type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
 
@@ -13,7 +14,7 @@ const MERGERS: Record<string, MergeFn> = {
   'nix/fmt.nix': mergeFmt,
   'nix/packages.nix': LWW,
   'nix/shells.nix': LWW,
-  'nix/pre-commit.nix': LWW,
+  'nix/pre-commit.nix': mergePrecommit,
 };
 
 StartResolverWithLambda(async (input: ResolverInput): Promise<ResolverOutput> => {
