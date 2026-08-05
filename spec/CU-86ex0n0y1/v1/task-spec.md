@@ -1,5 +1,10 @@
 # Task Spec: Nix Resolver (atomi/nix) — v1
 
+> **Superseded by the CyanPrint v4 conversion (PR #4).** The SDK and entry-point
+> requirements recorded below were true of this task when it was written and are kept verbatim as a
+> historical record. Current shape: `export function resolver(input)` with a type-only
+> `@cyanprint/sdk` import. Do not follow this document as instructions.
+
 **Ticket:** CU-86ex0n0y1
 **Repo:** ketone.nix-resolver
 **Language:** TypeScript
