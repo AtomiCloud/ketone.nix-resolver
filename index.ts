@@ -1,4 +1,4 @@
-import { type ResolverOutput, StartResolverWithLambda, type ResolverInput } from '@atomicloud/cyan-sdk';
+import type { ResolverInput, ResolverOutput } from '@cyanprint/sdk';
 import { mergeFlake } from './cyan/src/merge-flake.ts';
 import { mergeEnv } from './cyan/src/merge-env.ts';
 import { mergeFmt } from './cyan/src/merge-fmt.ts';
@@ -19,7 +19,7 @@ const MERGERS: Record<string, MergeFn> = {
   'nix/pre-commit.nix': mergePrecommit,
 };
 
-StartResolverWithLambda(async (input: ResolverInput): Promise<ResolverOutput> => {
+export async function resolver(input: ResolverInput): Promise<ResolverOutput> {
   const { files } = input;
 
   if (files.length === 0) throw new Error('Resolver received no files — at least 1 file is required');
@@ -57,4 +57,4 @@ StartResolverWithLambda(async (input: ResolverInput): Promise<ResolverOutput> =>
     : sorted[sorted.length - 1].content;
 
   return { path, content };
-});
+}
