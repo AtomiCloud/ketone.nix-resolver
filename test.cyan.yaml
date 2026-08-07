@@ -395,6 +395,22 @@ tests:
           template: template-b
           layer: 1
 
+  - name: precommit_multiline_let
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_multiline_let
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_multiline_let/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_multiline_let/template-b
+        origin:
+          template: template-b
+          layer: 1
+
   - name: precommit_commutativity
     expected:
       type: snapshot

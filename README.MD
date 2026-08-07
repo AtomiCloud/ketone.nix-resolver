@@ -21,7 +21,7 @@ The resolver dispatches to a file-type-specific merger based on the file's basen
 | `nix/fmt.nix`      | `mergeFmt`      | Deep merge: programs (enable true-wins, extra\_args LWW), projectRootFile LWW              |
 | `nix/packages.nix` | `mergePackages` | Sub-block merge: function args (union), inherit IDs (LWW per identifier), assignments (LWW) |
 | `nix/shells.nix`   | `mergeShells`   | Shell merge: buildInputs (union, dedupe, sort) per shell name                              |
-| `nix/pre-commit.nix` | `mergePrecommit` | Deep merge: hooks (enable true-wins, string fields LWW, array fields concat+dedupe)     |
+| `nix/pre-commit.nix` | `mergePrecommit` | Deep merge: equal function args, highest-layer `let` prelude and `src`, hook union, enable true-wins, string fields LWW, array fields concat+dedupe |
 | any other `.nix`   | fallback        | Last-write-wins: highest layer wins                                                        |
 
 ### Field-level merge rules
