@@ -24,9 +24,8 @@
         system:
         let
           pkgs-2511 = nixpkgs-2511.legacyPackages.${system};
-          pkgs = pkgs-2511;
         in
-        
+        let pkgs = pkgs-2511; in
         with rec {
           packages = import ./nix/packages.nix
             {
