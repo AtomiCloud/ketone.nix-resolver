@@ -8,8 +8,6 @@ import { mergeShells } from './cyan/src/merge-shells.ts';
 
 type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
 
-const LWW: MergeFn = (sortedFiles) => sortedFiles[sortedFiles.length - 1].content;
-
 const MERGERS: Record<string, MergeFn> = {
   'flake.nix': mergeFlake,
   'nix/env.nix': mergeEnv,
@@ -45,16 +43,33 @@ export async function resolver(input: ResolverInput): Promise<ResolverOutput> {
   // Try basename first, then full relative path
   const merger = MERGERS[basename] ?? MERGERS[fullRelPath];
 
-  // If no specific merger found, fall back to LWW (highest layer wins)
-  const content = merger
-    ? merger(
-        sorted.map((f) => ({
-          content: f.content,
-          layer: f.origin.layer,
-          template: f.origin.template,
-        })),
-      )
-    : sorted[sorted.length - 1].content;
+  const variations = sorted.map((f) => ({
+    content: f.content,
+    layer: f.origin.layer,
+    template: f.origin.template,
+  }));
 
-  return { path, content };
+  // A merger exists for this path: perform the structural merge.
+  if (merger) {
+    return { path, content: merger(variations) };
+  }
+
+  // Uncontested out-of-table path (a single variation): pass it through. The runtime
+  // never invokes a resolver for a single variation — it records `added` — so this
+  // branch only fires under the test harness and must not throw.
+  if (variations.length === 1) {
+    return { path, content: variations[0].content };
+  }
+
+  // A contested path (2+ differing variations) outside the dispatch table: REFUSE.
+  // The runtime records `resolver-merged` for any resolver call that returns content,
+  // so silently returning last-write-wins bytes here would stamp a merge that was never
+  // performed — a provenance lie (RESOLVERS.md §6.4). Throwing propagates through
+  // resolveLayers before that decision is recorded, so the wrong value can't be produced.
+  throw new Error(
+    `atomi/nix has no merger for "${path}" but received ${variations.length} variations. ` +
+      `The path is outside the dispatch table (${Object.keys(MERGERS).join(', ')}); ` +
+      `merging it would silently last-write-wins while recording resolver-merged. ` +
+      `Add a merger for this path, or remove it from the resolver's files: globs.`,
+  );
 }

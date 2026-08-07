@@ -8,7 +8,7 @@ pre-commit-lib.run {
       description = "Lints helm charts";
       entry = "${package}/bin/helmlint";
       files = "infra/.*";
-      language = system;
+      language = "system";
       name = "Lint Helm Charts";
       package = packages.infralint;
       pass_filenames = false;

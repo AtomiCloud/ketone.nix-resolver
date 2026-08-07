@@ -8,7 +8,7 @@ pre-commit-lib.run {
       description = "Lints helm charts";
       entry = "${package}/bin/helmlint";
       files = "infra/.*";
-      language = system;
+      language = "system";
       name = "Lint Helm Charts";
       package = packages.infralint;
       pass_filenames = false;
@@ -18,7 +18,7 @@ pre-commit-lib.run {
       enable = true;
       description = "Scan for possible secrets";
       entry = "${packages.infisical}/bin/infisical scan . --verbose";
-      language = system;
+      language = "system";
       name = "Secrets Scanning";
       pass_filenames = false;
     };

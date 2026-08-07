@@ -103,6 +103,38 @@ tests:
           template: template-a
           layer: 0
 
+  - name: flake_real_workspace_bun_base
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_real_workspace_bun_base
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_real_workspace_bun_base/workspace
+        origin:
+          template: authoritative/workspace
+          layer: 0
+      - path: ./inputs/flake_real_workspace_bun_base/bun-base
+        origin:
+          template: authoritative/bun-base
+          layer: 1
+
+  - name: flake_real_workspace_bun_base_reversed
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/flake_real_workspace_bun_base
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/flake_real_workspace_bun_base/bun-base
+        origin:
+          template: authoritative/bun-base
+          layer: 1
+      - path: ./inputs/flake_real_workspace_bun_base/workspace
+        origin:
+          template: authoritative/workspace
+          layer: 0
+
   - name: env_single_file
     expected:
       type: snapshot
@@ -391,6 +423,22 @@ tests:
           template: template-a
           layer: 0
       - path: ./inputs/precommit_rec_preserved/template-b
+        origin:
+          template: template-b
+          layer: 1
+
+  - name: precommit_multiline_let
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/precommit_multiline_let
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/precommit_multiline_let/template-a
+        origin:
+          template: template-a
+          layer: 0
+      - path: ./inputs/precommit_multiline_let/template-b
         origin:
           template: template-b
           layer: 1
