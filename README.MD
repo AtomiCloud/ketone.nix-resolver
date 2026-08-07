@@ -4,7 +4,7 @@ AtomiCloud's nix merger
 
 ## Purpose
 
-Deep-merges Nix configuration files when multiple templates or layers contribute files to the same path. The resolver parses Nix files into structured data, merges entries across layers, and pretty-prints the result. Files not matching a known pattern fall back to last-write-wins (highest layer).
+Deep-merges Nix configuration files when multiple templates or layers contribute files to the same path. The resolver parses known Nix files into structured data and merges entries across layers. A single variation outside the dispatch table passes through unchanged; contested out-of-table paths refuse instead of silently applying last-write-wins while claiming a structural merge.
 
 ## Configuration Schema
 
@@ -22,7 +22,7 @@ The resolver dispatches to a file-type-specific merger based on the file's basen
 | `nix/packages.nix`   | `mergePackages`  | Sub-block merge: function args (union), inherit IDs (LWW per identifier), assignments (LWW)                                                              |
 | `nix/shells.nix`     | `mergeShells`    | Shell merge: buildInputs (union, dedupe, sort) per shell name                                                                                            |
 | `nix/pre-commit.nix` | `mergePrecommit` | Deep merge: equal function args, highest-layer `let` prelude and `src`, hook union, enable true-wins, string fields LWW, array fields concat+dedupe       |
-| any other `.nix`     | fallback         | Last-write-wins: highest layer wins                                                                                                                      |
+| any other path       | fallback         | Single variation passes through; contested variations refuse                                                                                            |
 
 ### Field-level merge rules
 
@@ -127,7 +127,7 @@ inputs = {
     };
 ```
 
-### Example 5: Fallback LWW for unknown .nix files
+### Example 5: Unknown contested paths refuse
 
 **Input files** (both `nix/overlay.nix`):
 
@@ -136,11 +136,7 @@ inputs = {
 | base            | 0            | `self: super: { }`                     |
 | custom          | 1            | `self: super: { go = super.go_1_22; }` |
 
-**Resolved output** (highest layer wins):
-
-```
-self: super: { go = super.go_1_22; }
-```
+**Result**: the resolver throws an error naming `nix/overlay.nix` and the dispatch table. It does not return last-write-wins content, so the runtime cannot record `resolver-merged` for a merge that never happened.
 
 ## Verification
 
