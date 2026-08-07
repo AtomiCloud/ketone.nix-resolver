@@ -156,7 +156,7 @@ Reference this resolver in a template's `cyan.yaml`:
 
 ```yaml
 resolvers:
-  - resolver: atomi/nix:version
+  - ref: atomi/nix@2
     config: {}
     files: ['**/*.nix']
 ```
