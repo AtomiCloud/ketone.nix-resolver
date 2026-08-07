@@ -7,7 +7,7 @@ pre-commit-lib.run {
       enable = true;
       description = "Shell script linter";
       entry = "shellcheck";
-      language = system;
+      language = "system";
       name = "Shellcheck";
       pass_filenames = true;
     };
