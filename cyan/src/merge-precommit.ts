@@ -17,6 +17,7 @@ interface HookConfig {
 
 interface ParsedPrecommit {
   functionArgs: string;
+  prelude: string;
   src: string;
   hooks: Map<string, HookConfig>;
   hasRec: Map<string, boolean>; // tracks which hooks use `rec`
@@ -25,14 +26,35 @@ interface ParsedPrecommit {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function findMatchingBrace(text: string, openIdx: number): number {
-  let depth = 1;
-  let i = openIdx;
-  while (i < text.length && depth > 0) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') depth--;
-    if (depth === 0) return i;
-    i++;
+  let depth = 0;
+  let inString = false;
+
+  for (let i = openIdx; i < text.length; i++) {
+    const char = text[i];
+
+    if (inString) {
+      if (char === '\\') {
+        i++;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '#') {
+      const newline = text.indexOf('\n', i);
+      if (newline === -1) break;
+      i = newline;
+    } else if (char === '{') {
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
   }
+
   return -1;
 }
 
@@ -46,7 +68,7 @@ function extractQuotedStrings(arrContent: string): string[] {
 }
 
 // Fields that take Nix identifiers (should NOT be quoted)
-const NIX_IDENTIFIER_FIELDS = ['language', 'package'];
+const NIX_IDENTIFIER_FIELDS = ['package'];
 
 // Determines if a string value should be quoted in Nix output
 function needsQuotes(key: string, value: string): boolean {
@@ -61,62 +83,37 @@ function needsQuotes(key: string, value: string): boolean {
 // ─── Parse ───────────────────────────────────────────────────────────────────
 
 function parsePrecommit(content: string): ParsedPrecommit {
-  const lines = content.split('\n');
-
-  // 1. Extract function args line — match ^{...}: using balanced brace matching
-  let functionArgs = '';
-  let lineIdx = 0;
-
-  const firstLine = lines[0]?.trim() ?? '';
-  if (firstLine.startsWith('{')) {
-    // Find the matching closing brace (handles nested braces)
-    let depth = 0;
-    let argEnd = -1;
-    for (let ci = 0; ci < firstLine.length; ci++) {
-      if (firstLine[ci] === '{') depth++;
-      else if (firstLine[ci] === '}') depth--;
-      if (depth === 0) { argEnd = ci; break; }
-    }
-    if (argEnd !== -1 && firstLine.slice(argEnd + 1).trim().startsWith(':')) {
-      functionArgs = firstLine.slice(0, argEnd + 1).trim();
-      lineIdx = 1;
-    }
+  // The function header in diene's files is normally multi-line.  Parsing it from
+  // the complete source avoids turning a valid header into the bare `:` output.
+  const headerStart = content.search(/\S/);
+  if (headerStart === -1 || content[headerStart] !== '{') {
+    throw new Error('pre-commit.nix function header not found');
+  }
+  const headerEnd = findMatchingBrace(content, headerStart);
+  if (headerEnd === -1 || content.slice(headerEnd + 1).match(/^\s*:/) === null) {
+    throw new Error('pre-commit.nix function header not found');
   }
 
-  // 2. Detect pre-commit-lib.run { wrapper and find hooks block
-  let inRunBlock = false;
-  let runBlockStart = -1;
-  let runBlockEnd = -1;
-  let braceDepth = 0;
+  const colonOffset = content.slice(headerEnd + 1).search(/:/);
+  const bodyStart = headerEnd + 1 + colonOffset + 1;
+  const functionArgs = content.slice(headerStart, headerEnd + 1).trim();
 
-  for (let i = lineIdx; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (!inRunBlock) {
-      if (trimmed === 'pre-commit-lib.run {') {
-        inRunBlock = true;
-        runBlockStart = i;
-        braceDepth = 1;
-        continue;
-      }
-    } else {
-      for (const char of line) {
-        if (char === '{') braceDepth++;
-        else if (char === '}') braceDepth--;
-      }
-      if (braceDepth === 0) {
-        runBlockEnd = i;
-        break;
-      }
-    }
+  // Preserve the highest layer's let/in prelude.  Hook configuration may refer to
+  // bindings declared there, so dropping it makes a syntactically invalid or
+  // unevaluable output even when the hook merge itself is correct.
+  const body = content.slice(bodyStart);
+  const runMatch = /\bpre-commit-lib\.run\s*\{/.exec(body);
+  if (!runMatch || runMatch.index === undefined) {
+    throw new Error('pre-commit.nix pre-commit-lib.run block not found');
   }
-
-  // Extract the run block content
-  let runBlockContent = '';
-  if (runBlockStart !== -1 && runBlockEnd !== -1) {
-    runBlockContent = lines.slice(runBlockStart, runBlockEnd + 1).join('\n');
+  const runBlockStart = bodyStart + runMatch.index;
+  const runOpen = content.indexOf('{', runBlockStart);
+  const runBlockEnd = findMatchingBrace(content, runOpen);
+  if (runBlockEnd === -1) {
+    throw new Error('pre-commit.nix pre-commit-lib.run block is not closed');
   }
+  const prelude = content.slice(bodyStart, runBlockStart).trim();
+  const runBlockContent = content.slice(runBlockStart, runBlockEnd + 1);
 
   // 3. Extract src value
   let src = './.';
@@ -129,7 +126,7 @@ function parsePrecommit(content: string): ParsedPrecommit {
   const hooks = parseHooks(runBlockContent);
   const hasRec = detectRecHooks(runBlockContent);
 
-  return { functionArgs, src, hooks, hasRec };
+  return { functionArgs, prelude, src, hooks, hasRec };
 }
 
 function detectRecHooks(blockContent: string): Map<string, boolean> {
@@ -487,13 +484,15 @@ export function mergePrecommit(
     if (config.stages) config.stages.sort();
   }
 
-  return prettyPrint(firstArgs, src, mergedHooks, mergedRec);
+  const prelude = parsed[parsed.length - 1].prelude;
+  return prettyPrint(firstArgs, prelude, src, mergedHooks, mergedRec);
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
 
 function prettyPrint(
   functionArgs: string,
+  prelude: string,
   src: string,
   hooks: Map<string, HookConfig>,
   hasRec: Map<string, boolean>,
@@ -503,6 +502,10 @@ function prettyPrint(
   // Function args (sort alphabetically)
   const sortedArgs = sortFunctionArgs(functionArgs);
   lines.push(`${sortedArgs}:`);
+
+  if (prelude) {
+    lines.push(prelude);
+  }
 
   // pre-commit-lib.run { ... }
   lines.push('pre-commit-lib.run {');
