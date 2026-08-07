@@ -2,6 +2,9 @@
   "name": "resolver",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "test": "bun test && cyanprint test ."
+  },
   "devDependencies": {
     "bun-types": "latest"
   },
