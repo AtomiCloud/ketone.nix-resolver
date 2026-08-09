@@ -52,10 +52,21 @@
           };
           devShells = import ./nix/shells.nix {
             inherit pkgs env packages;
+            shellHook = checks.pre-commit-check.shellHook;
+          };
+          pre-commit = import ./nix/pre-commit.nix {
+            inherit packages pre-commit-lib formatter;
+          };
+          formatter = import ./nix/fmt.nix {
+            inherit treefmt-nix pkgs;
+          };
+          checks = {
+            pre-commit-check = pre-commit;
+            format = formatter;
           };
         };
         {
-          inherit packages devShells;
+          inherit packages devShells checks formatter;
         }
       )
     )

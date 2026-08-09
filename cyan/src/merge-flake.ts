@@ -1,5 +1,7 @@
 // merge-flake.ts — Parser and base-preserving merger for flake.nix files
 
+import { inventoryMaterial } from './loss-guard.ts';
+
 interface InputEntry {
   name: string;
   url: string;
@@ -19,6 +21,11 @@ interface RegistryLine {
 interface WithRecAssignment {
   name: string;
   body: string; // the RHS up to the next assignment or closing brace
+  raw: string; // `name = <rhs>;` exactly as it appeared in its source file
+  indent: string; // leading whitespace of the line the assignment starts on
+  leadingComments: string[]; // own-line comments directly above, trimmed
+  start: number; // byte offset of the name in the file it was parsed from
+  end: number; // byte offset just past the assignment's terminating `;`
 }
 
 interface ParsedFlake {
@@ -287,6 +294,31 @@ function parsePkgsAlias(content: string): string | null {
   return matches.length > 0 ? matches[matches.length - 1][1].trim() : null;
 }
 
+/** Leading whitespace of the line `offset` sits on, or '' when it is not the first token. */
+function lineIndentAt(text: string, offset: number): string {
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  const prefix = text.slice(lineStart, offset);
+  return /^[ \t]*$/.test(prefix) ? prefix : '';
+}
+
+/** Own-line comments in the unbroken run directly above `offset`, trimmed, top-down. */
+function commentsAbove(text: string, offset: number): string[] {
+  let lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  if (!/^[ \t]*$/.test(text.slice(lineStart, offset))) return [];
+
+  const comments: string[] = [];
+  while (lineStart > 0) {
+    const previousEnd = lineStart - 1;
+    const previousStart =
+      previousEnd === 0 ? 0 : text.lastIndexOf('\n', previousEnd - 1) + 1;
+    const line = text.slice(previousStart, previousEnd).trim();
+    if (!line.startsWith('#')) break;
+    comments.unshift(line);
+    lineStart = previousStart;
+  }
+  return comments;
+}
+
 function parseWithRecAssignments(content: string): WithRecAssignment[] {
   // Find "with rec {"
   const match = content.match(/with\s+rec\s*\{/);
@@ -304,6 +336,22 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
   let currentBody = '';
   let depth = 0;
   let inAssignment = false;
+  let nameStart = 0;
+
+  // The raw source of an assignment is spliced verbatim into another file when a
+  // lower layer contributes a binding the base does not have, so every assignment
+  // carries the offsets it was cut from alongside the parsed name and body.
+  const record = (rhs: string, end: number): void => {
+    assignments.push({
+      name: currentName.trim(),
+      body: rhs.trim().replace(/\s*;\s*$/, ''),
+      raw: body.slice(nameStart, end).trimEnd(),
+      indent: lineIndentAt(body, nameStart),
+      leadingComments: commentsAbove(body, nameStart),
+      start: braceStart + nameStart,
+      end: braceStart + end,
+    });
+  };
 
   let pos = 0;
   while (pos < body.length) {
@@ -322,6 +370,7 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
         continue;
       }
       if (char !== ' ' && char !== '\n' && char !== '\t' && char !== ';') {
+        if (currentName === '') nameStart = pos;
         currentName += char;
       }
       pos++;
@@ -344,12 +393,7 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
         // Do NOT strip } — it belongs to attrset/function-call syntax
         // (e.g. "import ./nix/packages.nix { inherit pkgs; }") and must be
         // preserved for callers inspecting the parsed assignment body.
-        let body = currentBody.trim();
-        body = body.replace(/\s*;\s*$/, '');
-        assignments.push({
-          name: currentName.trim(),
-          body,
-        });
+        record(currentBody, pos);
         currentName = '';
         currentBody = '';
         depth = 0;
@@ -360,13 +404,7 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
 
   // Handle last assignment without trailing semicolon check
   if (currentName.trim() && currentBody.trim()) {
-    // Only strip trailing ; (assignment terminator), not }
-    let body = currentBody.trim();
-    body = body.replace(/\s*;\s*$/, '');
-    assignments.push({
-      name: currentName.trim(),
-      body,
-    });
+    record(currentBody, pos);
   }
 
   return assignments;
@@ -742,35 +780,349 @@ function insertMissingPackageInherits(
 
   const semicolon =
     argsOpen + 1 + inheritMatch.index! + inheritMatch[0].lastIndexOf(';');
-  const inheritText = inheritMatch[1];
-  if (!inheritText.includes('\n')) {
-    return (
-      content.slice(0, semicolon) +
-      ' ' +
-      missing.join(' ') +
-      content.slice(semicolon)
-    );
-  }
+  return spliceInheritIds(content, semicolon, inheritMatch[1], missing);
+}
 
-  const semicolonLineStart = content.lastIndexOf('\n', semicolon) + 1;
-  const beforeSemicolon = content.slice(semicolonLineStart, semicolon);
-  if (/^\s*$/.test(beforeSemicolon)) {
-    const indent = beforeSemicolon;
-    const block = missing.map((id) => indent + id).join('\n');
-    return (
-      content.slice(0, semicolonLineStart) +
-      block +
-      '\n' +
-      content.slice(semicolonLineStart)
-    );
-  }
-
-  return (
+/**
+ * Add identifiers to an existing `inherit ...;`, matching how the list is already
+ * rendered: appended on the same line for a compact list, one per line for the
+ * exploded form treefmt produces once the list grows.
+ */
+function spliceInheritIds(
+  content: string,
+  semicolon: number,
+  inheritText: string,
+  missing: string[],
+): string {
+  const appendInline = (): string =>
     content.slice(0, semicolon) +
     ' ' +
     missing.join(' ') +
-    content.slice(semicolon)
+    content.slice(semicolon);
+
+  if (!inheritText.includes('\n')) return appendInline();
+
+  const semicolonLineStart = content.lastIndexOf('\n', semicolon) + 1;
+  const beforeSemicolon = content.slice(semicolonLineStart, semicolon);
+  if (!/^\s*$/.test(beforeSemicolon)) return appendInline();
+
+  const block = missing.map((id) => beforeSemicolon + id).join('\n');
+  return (
+    content.slice(0, semicolonLineStart) +
+    block +
+    '\n' +
+    content.slice(semicolonLineStart)
   );
+}
+
+function quoteNames(names: string[]): string {
+  return names.map((name) => `'${name}'`).join(', ');
+}
+
+/**
+ * Move a captured source block from one indentation column to another. Only the
+ * continuation lines shift; the first line is placed by the caller.
+ */
+function shiftIndent(raw: string, delta: number): string {
+  if (delta === 0) return raw;
+  return raw
+    .split('\n')
+    .map((line, index) => {
+      if (index === 0 || line.trim() === '') return line;
+      if (delta > 0) return ' '.repeat(delta) + line;
+      const leading = line.match(/^[ \t]*/)![0];
+      return line.slice(Math.min(leading.length, -delta));
+    })
+    .join('\n');
+}
+
+function renderWithRecAssignment(
+  assignment: WithRecAssignment,
+  indent: string,
+): string {
+  const lines = assignment.leadingComments.map((comment) => indent + comment);
+  const raw = assignment.raw.endsWith(';')
+    ? assignment.raw
+    : `${assignment.raw};`;
+  lines.push(
+    indent + shiftIndent(raw, indent.length - assignment.indent.length),
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Splice the `with rec` bindings a lower layer contributes and the base does not
+ * have. `rec` makes the block order-independent, so appending before the closing
+ * brace is enough — no dependency sort is needed, and the base keeps its bytes.
+ */
+function insertMissingWithRecAssignments(
+  content: string,
+  merged: WithRecAssignment[],
+): string {
+  const baseNames = new Set(
+    parseWithRecAssignments(content).map((assignment) => assignment.name),
+  );
+  const missing = merged.filter(
+    (assignment) => !baseNames.has(assignment.name),
+  );
+  if (missing.length === 0) return content;
+
+  const region = findBracedRegion(content, /with\s+rec\s*\{/);
+  if (!region)
+    throw new Error(
+      `Cannot merge flake.nix: with rec block was not found, so ` +
+        `${quoteNames(missing.map((assignment) => assignment.name))} could not be spliced`,
+    );
+
+  const body = content.slice(region.open + 1, region.close);
+  const entryIndent = body.match(/^([ \t]*)[\w'-]+\s*=/m)?.[1] ?? '          ';
+  const block = missing
+    .map((assignment) => renderWithRecAssignment(assignment, entryIndent))
+    .join('\n');
+
+  return insertBeforeClosingBrace(content, region.close, block);
+}
+
+function findFinalInheritSemicolon(
+  content: string,
+): { semicolon: number; text: string } | null {
+  const region = findBracedRegion(content, /with\s+rec\s*\{/);
+  if (!region) return null;
+
+  const afterRec = content.slice(region.close);
+  const match = afterRec.match(/\{\s*inherit\s+([^;]+);\s*\}/);
+  if (!match) return null;
+
+  return {
+    semicolon: region.close + match.index! + match[0].indexOf(';'),
+    text: match[1],
+  };
+}
+
+/** Splice the identifiers a lower layer exposes from the flake into the base's final attrset. */
+function insertMissingFinalInherits(
+  content: string,
+  mergedIds: string[],
+): string {
+  const baseIds = new Set(parseFinalInheritIds(content));
+  const missing = mergedIds.filter((id) => !baseIds.has(id)).sort();
+  if (missing.length === 0) return content;
+
+  const target = findFinalInheritSemicolon(content);
+  if (!target)
+    throw new Error(
+      `Cannot merge flake.nix: the final inherit attribute set was not found, so ` +
+        `${quoteNames(missing)} could not be spliced`,
+    );
+
+  return spliceInheritIds(content, target.semicolon, target.text, missing);
+}
+
+/** The last top-level `{ ... }` inside `[start, end)` — an assignment's argument set. */
+function findTrailingBracedRegion(
+  content: string,
+  start: number,
+  end: number,
+): BracedRegion | null {
+  let depth = 0;
+  let open = -1;
+  let region: BracedRegion | null = null;
+
+  for (let index = start; index < end; index++) {
+    if (content[index] === '{') {
+      if (depth === 0) open = index;
+      depth++;
+    } else if (content[index] === '}') {
+      depth--;
+      if (depth === 0 && open !== -1) region = { open, close: index };
+      if (depth < 0) break;
+    }
+  }
+  return region;
+}
+
+interface ArgEntry {
+  kind: 'inherit' | 'binding';
+  /** The names this entry brings into scope. */
+  names: string[];
+  /** The entry exactly as it appeared, terminated by `;`. */
+  text: string;
+  indent: string;
+}
+
+function classifyArgEntry(segment: string): ArgEntry | null {
+  const trimmed = segment.trim();
+  if (!trimmed) return null;
+
+  const offset = segment.length - segment.trimStart().length;
+  const indent = lineIndentAt(segment, offset);
+  const inherit = trimmed.match(/^inherit\b([\s\S]*);$/);
+  if (inherit) {
+    // `inherit (foo) a b;` takes its names from foo — the parenthesised source is
+    // not itself an inherited identifier.
+    const names = inherit[1]
+      .replace(/^\s*\([\s\S]*?\)/, '')
+      .match(/[a-zA-Z_][\w'-]*/g);
+    return names ? { kind: 'inherit', names, text: trimmed, indent } : null;
+  }
+
+  const binding = trimmed.match(/^([a-zA-Z_][\w'-]*)\s*=/);
+  return binding
+    ? { kind: 'binding', names: [binding[1]], text: trimmed, indent }
+    : null;
+}
+
+function parseArgEntries(content: string, region: BracedRegion): ArgEntry[] {
+  const body = content.slice(region.open + 1, region.close);
+  const entries: ArgEntry[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index];
+    if (char === '{' || char === '[' || char === '(') depth++;
+    else if (char === '}' || char === ']' || char === ')') depth--;
+    else if (char === ';' && depth === 0) {
+      const entry = classifyArgEntry(body.slice(start, index + 1));
+      if (entry) entries.push(entry);
+      start = index + 1;
+    }
+  }
+  return entries;
+}
+
+function insertArgEntry(
+  content: string,
+  assignmentName: string,
+  entry: ArgEntry,
+  lostName: string,
+): string {
+  const target = parseWithRecAssignments(content).find(
+    (assignment) => assignment.name === assignmentName,
+  );
+  if (!target) return content;
+
+  const region = findTrailingBracedRegion(content, target.start, target.end);
+  if (!region) return content;
+
+  const body = content.slice(region.open + 1, region.close);
+  const entryIndent = body.match(/^([ \t]*)\S/m)?.[1] ?? '';
+
+  if (entry.kind === 'inherit') {
+    const inheritMatch = body.match(/\binherit\b([\s\S]*?);/);
+    if (!inheritMatch)
+      return insertBeforeClosingBrace(
+        content,
+        region.close,
+        `${entryIndent}inherit ${lostName};`,
+      );
+    const semicolon =
+      region.open + 1 + inheritMatch.index! + inheritMatch[0].lastIndexOf(';');
+    return spliceInheritIds(content, semicolon, inheritMatch[1], [lostName]);
+  }
+
+  const rendered = shiftIndent(
+    entry.text,
+    entryIndent.length - entry.indent.length,
+  );
+  return insertBeforeClosingBrace(
+    content,
+    region.close,
+    entryIndent + rendered,
+  );
+}
+
+/**
+ * Last-write-wins settles which body a contested `with rec` binding keeps, but it may
+ * not delete a name outright: `devShells` superseded by a layer that drops
+ * `shellHook = ...` from the import's argument set would lose `shellHook` entirely.
+ * Rescue exactly the argument entries whose names survive nowhere else in the merged
+ * file — anything still reachable stays where the winning layer put it, so the base
+ * is not rewritten for names it already carries.
+ */
+function rescueLostArgEntries(
+  content: string,
+  parsed: ParsedFlake[],
+  sources: string[],
+): string {
+  const required = new Set<string>();
+  for (const source of sources) {
+    const inventory = inventoryMaterial(source);
+    for (const name of inventory.bindings) required.add(name);
+    for (const name of inventory.inherited) required.add(name);
+  }
+
+  // Ascending layers, so the highest layer that offers a rescue for a name wins.
+  const candidates = new Map<
+    string,
+    { assignmentName: string; entry: ArgEntry }
+  >();
+  for (const [index, flake] of parsed.entries()) {
+    const source = sources[index];
+    for (const assignment of flake.withRecAssignments) {
+      const region = findTrailingBracedRegion(
+        source,
+        assignment.start,
+        assignment.end,
+      );
+      if (!region) continue;
+      for (const entry of parseArgEntries(source, region)) {
+        for (const name of entry.names) {
+          candidates.set(name, { assignmentName: assignment.name, entry });
+        }
+      }
+    }
+  }
+
+  for (;;) {
+    const actual = inventoryMaterial(content);
+    const lost = [...required].find(
+      (name) =>
+        !actual.bindings.has(name) &&
+        !actual.inherited.has(name) &&
+        candidates.has(name),
+    );
+    if (lost === undefined) return content;
+
+    const candidate = candidates.get(lost)!;
+    // One attempt per name, whatever the outcome: the candidate set shrinks on every
+    // pass, so this terminates, and a name that stays lost is left to the loss guard,
+    // which names every remaining one at once.
+    candidates.delete(lost);
+    content = insertArgEntry(
+      content,
+      candidate.assignmentName,
+      candidate.entry,
+      lost,
+    );
+  }
+}
+
+/**
+ * An identifier exposed by the final attrset has to be bound by the merged file, or
+ * the result parses and then fails to evaluate — a worse outcome than refusing.
+ */
+function assertFinalInheritsAreBound(
+  content: string,
+  requiredIds: string[],
+): void {
+  if (requiredIds.length === 0) return;
+
+  const bound = new Set<string>();
+  for (const assignment of parseWithRecAssignments(content))
+    bound.add(assignment.name);
+  for (const line of parseRegistryLines(content)) bound.add(line.name);
+  const alias = parsePkgsAlias(content);
+  if (alias) bound.add(alias.split('=')[0].trim());
+  for (const group of parseOutputBinding(content).groups)
+    for (const item of group.items) bound.add(item);
+
+  const unbound = requiredIds.filter((id) => !bound.has(id));
+  if (unbound.length > 0)
+    throw new Error(
+      `Cannot merge flake.nix: final inherit ${quoteNames(unbound)} ` +
+        `${unbound.length === 1 ? 'is' : 'are'} not bound by the merged with rec block`,
+    );
 }
 
 function assertMergeInvariants(
@@ -873,6 +1225,10 @@ export function mergeFlake(
     }
   }
 
+  // Merge the `with rec` derivation bindings and the identifiers the flake exposes
+  const mergedWithRec = mergeWithRecAssignments(parsed);
+  const mergedFinalInherits = mergeFinalInheritIds(parsed);
+
   // Preserve the highest layer byte-for-byte and splice in only union members
   // missing from it. This keeps comments and syntax the parser does not model
   // attached to their original lines instead of routing the file through a
@@ -885,9 +1241,43 @@ export function mergeFlake(
     mergedOutputExpressions,
   );
   content = insertMissingRegistryLines(content, mergedRegistries, pkgsAlias);
+  content = insertMissingWithRecAssignments(content, mergedWithRec);
   content = insertMissingPackageInherits(content, [...allPackageInherits]);
+  content = insertMissingFinalInherits(content, mergedFinalInherits);
+  content = rescueLostArgEntries(
+    content,
+    parsed,
+    sortedFiles.map((f) => f.content),
+  );
+  assertFinalInheritsAreBound(content, mergedFinalInherits);
   assertMergeInvariants(content, mergedInputs, mergedOutputParams);
   return content;
+}
+
+/**
+ * Union the `with rec` bindings across layers, last-write-wins by name and keeping the
+ * position at which a name was first seen so the spliced order stays deterministic.
+ */
+function mergeWithRecAssignments(parsed: ParsedFlake[]): WithRecAssignment[] {
+  const order: string[] = [];
+  const byName = new Map<string, WithRecAssignment>();
+
+  for (const p of parsed) {
+    for (const assignment of p.withRecAssignments) {
+      if (!byName.has(assignment.name)) order.push(assignment.name);
+      byName.set(assignment.name, assignment);
+    }
+  }
+
+  return order.map((name) => byName.get(name)!);
+}
+
+function mergeFinalInheritIds(parsed: ParsedFlake[]): string[] {
+  const ids = new Set<string>();
+  for (const p of parsed) {
+    for (const id of p.finalInheritIds) ids.add(id);
+  }
+  return [...ids];
 }
 
 function mergeInputEntries(parsed: ParsedFlake[]): CommentGroup[] {
