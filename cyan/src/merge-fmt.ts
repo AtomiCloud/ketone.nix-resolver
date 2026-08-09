@@ -355,6 +355,8 @@ function splitAttrEntries(body: string, label: string, what: string): AttrEntry[
     const valueStart = cursor;
     let depth = 0;
     let letDepth = 0;
+    // Pending `with ...;` / `assert ...;` preludes whose own `;` has not been seen yet.
+    let preludes = 0;
     while (cursor < code.length) {
       const char = code[cursor];
       if (char === '{' || char === '[' || char === '(') depth++;
@@ -369,7 +371,18 @@ function splitAttrEntries(body: string, label: string, what: string): AttrEntry[
         letDepth--;
         cursor += 'in'.length;
         continue;
-      } else if (char === ';' && depth === 0 && letDepth === 0) break;
+      } else if (depth === 0 && letDepth === 0 && (isBareWord(code, cursor, 'with') || isBareWord(code, cursor, 'assert'))) {
+        // `package = with pkgs; nixfmt-rfc-style;` — the first `;` closes the prelude,
+        // not the binding. Counted only at depth zero outside a nested `let`, because
+        // anywhere else its `;` is not a candidate terminator either, so the two stay
+        // in step.
+        preludes++;
+        cursor += isBareWord(code, cursor, 'with') ? 'with'.length : 'assert'.length;
+        continue;
+      } else if (char === ';' && depth === 0 && letDepth === 0) {
+        if (preludes === 0) break;
+        preludes--;
+      }
       cursor++;
     }
     if (cursor >= code.length) {
@@ -585,6 +598,13 @@ function parseFmt(content: string, label: string): ParsedFmt {
 export function mergeFmt(
   sortedFiles: { content: string; layer: number; template: string }[],
 ): string {
+  if (sortedFiles.length === 0) {
+    // The one case the loss guard structurally cannot catch: nothing was supplied, so
+    // nothing can be reported as lost. Without this, `parsed[0]` raises an
+    // implementation TypeError instead of a merger refusal naming the file.
+    throw new Error('Cannot merge nix/fmt.nix: no files were provided; at least one is required.');
+  }
+
   const labels = sortedFiles.map((file, index) => `layer ${index} (template: ${file.template})`);
   const parsed = sortedFiles.map((file, index) => parseFmt(file.content, labels[index]));
 

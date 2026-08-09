@@ -129,3 +129,88 @@ in
     expectFixedPoint(output);
   });
 });
+
+/** A fmt.nix whose `nixfmt` program carries `field` alongside `enable`. */
+function withProgramField(field: string): string {
+  return `{ pkgs, treefmt-nix, ... }:
+let
+  fmt = {
+    projectRootFile = "flake.nix";
+
+    programs = {
+      nixfmt = {
+        enable = true;
+        ${field}
+      };
+      shfmt.enable = true;
+    };
+  };
+in
+(treefmt-nix.lib.evalModule pkgs fmt).config.build.wrapper
+`;
+}
+
+describe('mergeFmt — `with` / `assert` preludes in a value', () => {
+  // The value scan ended at the first depth-zero `;`, which for `with pkgs; foo;` is the
+  // one closing the prelude. The remainder was then read as a new attribute entry and
+  // the merger refused a perfectly valid file, blaming the wrong thing:
+  // "unrecognised entry starting \"nixfmt-rfc-style;\"".
+  const preludes: Record<string, string> = {
+    'with': 'package = with pkgs; nixfmt-rfc-style;',
+    'assert': 'package = assert pkgs != null; pkgs.nixfmt;',
+    'two stacked preludes': 'package = with pkgs; with pkgs.lib; nixfmt-rfc-style;',
+    'a prelude followed by a nested let': 'package = with pkgs; let p = nixfmt; in p;',
+  };
+
+  for (const [name, field] of Object.entries(preludes)) {
+    test(`${name} does not end the binding at the prelude's semicolon`, () => {
+      const output = merge(withProgramField(field));
+
+      expectParseableNix(output);
+      expect(output).toContain(field);
+      // The binding after the one carrying the prelude must still be parsed.
+      expect(output).toContain('shfmt.enable = true;');
+      expectFixedPoint(output);
+    });
+  }
+
+  test('a prelude inside a list item is left alone', () => {
+    const output = merge(withProgramField('extra_args = [ (with pkgs; "-i") ];'));
+
+    expectParseableNix(output);
+    expect(output).toContain('extra_args = [ (with pkgs; "-i") ];');
+    expectFixedPoint(output);
+  });
+
+  test('a value carrying a prelude is last-write-wins across layers', () => {
+    const output = merge(
+      withProgramField('package = with pkgs; nixfmt-rfc-style;'),
+      withProgramField('package = with pkgs; nixfmt-classic;'),
+    );
+
+    expectParseableNix(output);
+    expect(output).toContain('package = with pkgs; nixfmt-classic;');
+    expect(output).not.toContain('nixfmt-rfc-style');
+    expectFixedPoint(output);
+  });
+});
+
+describe('mergeFmt — zero inputs', () => {
+  // The one case the loss guard structurally cannot catch: nothing was supplied, so
+  // nothing can be reported as lost. Before the guard this was a TypeError from
+  // `parsed[0].functionArgs` — an implementation leak, not a merger refusal.
+  test('refuses by name instead of raising a TypeError', () => {
+    let caught: unknown;
+    try {
+      mergeFmt([]);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(TypeError);
+    expect((caught as Error).message).toBe(
+      'Cannot merge nix/fmt.nix: no files were provided; at least one is required.',
+    );
+  });
+});
