@@ -151,6 +151,80 @@ function findKeyword(code: string, from: number, word: string): number {
   return from + match.index + match[0].lastIndexOf(word);
 }
 
+const IDENTIFIER_CHAR = /[a-zA-Z0-9_'-]/;
+
+/**
+ * True when `word` sits at `index` as a bare keyword rather than as part of a longer
+ * identifier or an attribute selection. `inherit` must not read as `in`, and `x.in`
+ * must not read as the `in` that closes a `let`.
+ */
+function isBareWord(code: string, index: number, word: string): boolean {
+  if (!code.startsWith(word, index)) return false;
+  const before = index > 0 ? code[index - 1] : '';
+  if (before !== '' && (IDENTIFIER_CHAR.test(before) || before === '.')) return false;
+  const after = code[index + word.length] ?? '';
+  return after === '' || !IDENTIFIER_CHAR.test(after);
+}
+
+interface LetScan {
+  /** Offset of the `fmt` in the top-level `fmt = { ... }` binding, or -1. */
+  fmtNameStart: number;
+  /** Offset of that binding's opening `{`, or -1. */
+  fmtOpen: number;
+  /** Offset of the `in` that closes this `let`, or -1. */
+  inIndex: number;
+}
+
+/**
+ * Walk a `let` body once, tracking bracket depth and nested `let ... in` depth, to find
+ * the top-level `fmt = { ... }` binding and the `in` that closes the block.
+ *
+ * Both have to be depth aware. `helper = let a = 1; in a;` sitting beside `fmt` used to
+ * hand back the inner `in`, which truncated the `let` suffix and made the tail
+ * `a;\nin\n...` — syntactically broken Nix, emitted with exit success. A `fmt` attribute
+ * nested inside an earlier binding used to be picked ahead of the real one for the same
+ * reason: the search was a plain scan, not a structural one.
+ */
+function scanLetBody(code: string, from: number): LetScan {
+  let depth = 0;
+  let letDepth = 0;
+  let fmtNameStart = -1;
+  let fmtOpen = -1;
+
+  for (let index = from; index < code.length; index++) {
+    const char = code[index];
+
+    if (char === '{' || char === '[' || char === '(') {
+      depth++;
+      continue;
+    }
+    if (char === '}' || char === ']' || char === ')') {
+      depth--;
+      continue;
+    }
+    if (isBareWord(code, index, 'let')) {
+      letDepth++;
+      index += 'let'.length - 1;
+      continue;
+    }
+    if (isBareWord(code, index, 'in')) {
+      if (letDepth === 0 && depth === 0) return { fmtNameStart, fmtOpen, inIndex: index };
+      if (letDepth > 0) letDepth--;
+      index += 'in'.length - 1;
+      continue;
+    }
+    if (fmtOpen === -1 && depth === 0 && letDepth === 0 && isBareWord(code, index, 'fmt')) {
+      const match = /^fmt\s*=\s*\{/.exec(code.slice(index));
+      if (match) {
+        fmtNameStart = index;
+        fmtOpen = index + match[0].lastIndexOf('{');
+      }
+    }
+  }
+
+  return { fmtNameStart, fmtOpen, inIndex: -1 };
+}
+
 function splitTopLevelCommas(value: string): string[] {
   const code = mask(value);
   const parts: string[] = [];
@@ -280,11 +354,22 @@ function splitAttrEntries(body: string, label: string, what: string): AttrEntry[
     let cursor = index + keyMatch[0].length;
     const valueStart = cursor;
     let depth = 0;
+    let letDepth = 0;
     while (cursor < code.length) {
       const char = code[cursor];
       if (char === '{' || char === '[' || char === '(') depth++;
       else if (char === '}' || char === ']' || char === ')') depth--;
-      else if (char === ';' && depth === 0) break;
+      else if (isBareWord(code, cursor, 'let')) {
+        // `extra_args = let base = [ "-i" ]; in base;` — the `;` inside the nested `let`
+        // does not end the binding, so the value scan has to pair `let` with `in` too.
+        letDepth++;
+        cursor += 'let'.length;
+        continue;
+      } else if (letDepth > 0 && isBareWord(code, cursor, 'in')) {
+        letDepth--;
+        cursor += 'in'.length;
+        continue;
+      } else if (char === ';' && depth === 0 && letDepth === 0) break;
       cursor++;
     }
     if (cursor >= code.length) {
@@ -411,12 +496,10 @@ function parseFmt(content: string, label: string): ParsedFmt {
   }
   const letBodyStart = letIndex + 'let'.length;
 
-  const fmtMatch = /(?:^|[^a-zA-Z0-9_'.-])(fmt)\s*=\s*\{/.exec(code.slice(letBodyStart));
-  if (!fmtMatch) {
+  const { fmtNameStart, fmtOpen, inIndex } = scanLetBody(code, letBodyStart);
+  if (fmtOpen === -1) {
     throw new Error(`${FILE}: could not find the 'fmt = { ... }' binding inside 'let' in ${label}`);
   }
-  const fmtNameStart = letBodyStart + fmtMatch.index + fmtMatch[0].indexOf('fmt');
-  const fmtOpen = letBodyStart + fmtMatch.index + fmtMatch[0].lastIndexOf('{');
   const fmtClose = matchingIndex(code, fmtOpen);
   if (fmtClose === -1) {
     throw new Error(`${FILE}: the 'fmt = { ... }' binding is never closed in ${label}`);
@@ -426,7 +509,6 @@ function parseFmt(content: string, label: string): ParsedFmt {
   while (afterFmt < code.length && /\s/.test(code[afterFmt])) afterFmt++;
   if (code[afterFmt] === ';') afterFmt++;
 
-  const inIndex = findKeyword(code, fmtClose + 1, 'in');
   if (inIndex === -1) {
     throw new Error(`${FILE}: could not find the 'in' that closes the 'let' block in ${label}`);
   }
