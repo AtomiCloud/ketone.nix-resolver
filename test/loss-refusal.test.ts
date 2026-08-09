@@ -1,6 +1,9 @@
 import { test, expect, describe } from 'bun:test';
 import { resolver } from '../index.ts';
 import { mergePackages } from '../cyan/src/merge-packages.ts';
+import { mergeEnv } from '../cyan/src/merge-env.ts';
+import { mergeFmt } from '../cyan/src/merge-fmt.ts';
+import { mergeShells } from '../cyan/src/merge-shells.ts';
 import {
   assertNoLoss,
   findFunctionHeader,
@@ -259,7 +262,9 @@ describe('review findings — CodeRabbit, PR #10', () => {
     // `'''` escapes a literal `''` and `''${` escapes an interpolation. Closing at the
     // first `''` handed the rest of a shellHook body to the scanner as Nix code, which
     // then became phantom material assertNoLoss would demand in every output.
-    const source = "{ pkgs }:\n{\n  hook = ''\n    echo ''${NOT_A_BINDING}\n    ghost = 1;\n  '';\n}\n";
+    // Carries BOTH escapes: `''${` (escaped interpolation) and `'''` (an escaped literal
+    // `''`). Exercising only one leaves the other branch unproved.
+    const source = "{ pkgs }:\n{\n  hook = ''\n    echo ''${NOT_A_BINDING}\n    printf '''\n    ghost = 1;\n  '';\n}\n";
     const inventory = inventoryMaterial(source);
     expect(inventory.bindings.has('ghost')).toBe(false);
     expect(inventory.bindings.has('NOT_A_BINDING')).toBe(false);
@@ -328,5 +333,39 @@ describe('review findings — CodeRabbit, PR #10', () => {
     const merged = await resolver({ files: [variation('nix/packages.nix', content)] } as never);
     expect(merged.content).toContain('releaser');
     expect(merged.content).not.toContain('decoy');
+  });
+});
+
+describe('review findings — round 2', () => {
+  const MERGERS_FOR_TEST: Record<string, (f: { content: string; layer: number; template: string }[]) => string> = {
+    'nix/env.nix': mergeEnv,
+    'nix/fmt.nix': mergeFmt,
+    'nix/packages.nix': mergePackages,
+    'nix/shells.nix': mergeShells,
+  };
+
+  test('shells.nix accepts a dotted `with` prelude', async () => {
+    // The guard learned to inventory `with pkgs.lib;` before parseShells learned to
+    // accept it, which turned a valid file into a refusal — a regression introduced by
+    // the fix for the previous round, caught by the next one.
+    const content = '{ pkgs }:\nwith pkgs.lib;\n{\n  cd = pkgs.mkShell {\n    buildInputs = [];\n  };\n}\n';
+    const merged = await resolver({ files: [variation('nix/shells.nix', content)] } as never);
+    expect(merged.content).toContain('with pkgs.lib;');
+  });
+
+  test('every merger refuses zero inputs instead of throwing a TypeError', () => {
+    // Zero inputs are the one case the loss guard cannot catch: nothing was supplied, so
+    // nothing is missing. Each merger has to say so itself.
+    for (const [path, merger] of Object.entries(MERGERS_FOR_TEST)) {
+      let error: Error | undefined;
+      try {
+        merger([]);
+      } catch (thrown) {
+        error = thrown as Error;
+      }
+      expect(error, `${path} accepted zero inputs`).toBeDefined();
+      expect(error, `${path} threw an implementation error`).not.toBeInstanceOf(TypeError);
+      expect(error!.message).toMatch(/no files were provided|at least one/i);
+    }
   });
 });

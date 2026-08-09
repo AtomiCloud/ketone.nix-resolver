@@ -132,6 +132,12 @@ function parseEnv(content: string): ParsedEnv {
 export function mergeEnv(
   sortedFiles: { content: string; layer: number; template: string }[],
 ): string {
+  if (sortedFiles.length === 0) {
+    // Zero inputs is the one case the loss guard cannot catch — nothing was supplied, so
+    // nothing is missing — and without this the merger dies on `parsed[0]` with an
+    // implementation TypeError instead of a refusal the caller can act on.
+    throw new Error('Cannot merge nix/env.nix: no files were provided; at least one is required.');
+  }
   const parsed = sortedFiles.map((f) => parseEnv(f.content));
 
   // Function args: same set across all inputs — fail if different. Compared on a sorted

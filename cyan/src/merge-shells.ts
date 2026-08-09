@@ -113,12 +113,16 @@ function parseShells(content: string): ParsedShells {
   }
 
   // `with env;` — and any other prelude — sits between the head and the attrset.
+  // A prelude may be a dotted path (`with pkgs.lib;`), matching what the loss guard
+  // inventories. Accepting only a bare identifier here would refuse a valid file: the
+  // prelude would not match, the scan would then not find `{`, and the merger would
+  // report a missing attribute set.
   const preludes: string[] = [];
   let pos = skipWhitespace(code, header.colonIndex + 1);
   for (;;) {
-    const match = code.slice(pos).match(/^with\s+([a-zA-Z_][\w'-]*)\s*;/);
+    const match = code.slice(pos).match(/^with\s+([a-zA-Z_][\w'-]*(?:\s*\.\s*[a-zA-Z_][\w'-]*)*)\s*;/);
     if (!match) break;
-    preludes.push(match[1]);
+    preludes.push(match[1].replace(/\s+/g, ''));
     pos = skipWhitespace(code, pos + match[0].length);
   }
 
