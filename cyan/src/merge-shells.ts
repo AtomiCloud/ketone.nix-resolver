@@ -171,6 +171,15 @@ function parseShellBody(
 
     const inheritMatch = entryCode.match(/^inherit\b([\s\S]*)$/);
     if (inheritMatch) {
+      if (inheritMatch[1].trimStart().startsWith('(')) {
+        // `inherit (src) a b;` binds a/b from `src`, not from the enclosing scope.
+        // Unioning those identifiers with plain inherits would silently change where
+        // they resolve from, so refuse rather than mangle a shape we do not model.
+        refuse(
+          `shell "${name}" uses \`inherit (<source>) ...;\`, which this merger does not ` +
+            'model. Refusing rather than re-scoping the inherited names.',
+        );
+      }
       // `inherit shellHook;` — and any other inherited binding — must survive verbatim.
       // The old parser matched only the literal `inherit shellHook;` and re-derived it
       // from the (empty) argument list, so it was dropped whenever the head failed to

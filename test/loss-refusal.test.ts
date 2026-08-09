@@ -232,3 +232,18 @@ describe('an unmodelled shape refuses instead of emitting a skeleton', () => {
     );
   });
 });
+
+describe('shells.nix inherit forms', () => {
+  test('refuses `inherit (<source>) ...;` rather than re-scoping the names', async () => {
+    const content = '{ pkgs, env }:\nwith env;\n{\n  cd = pkgs.mkShell {\n    buildInputs = main;\n    inherit (pkgs) hello;\n  };\n}\n';
+    await expect(resolver({ files: [variation('nix/shells.nix', content)] } as never)).rejects.toThrow(
+      /inherit \(<source>\) \.\.\.;/,
+    );
+  });
+
+  test('keeps every plain inherited identifier, not just shellHook', async () => {
+    const content = '{ pkgs, env }:\nwith env;\n{\n  cd = pkgs.mkShell {\n    buildInputs = main;\n    inherit shellHook name;\n  };\n}\n';
+    const merged = await resolver({ files: [variation('nix/shells.nix', content)] } as never);
+    expect(merged.content).toContain('inherit name shellHook;');
+  });
+});
