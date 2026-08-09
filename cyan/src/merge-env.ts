@@ -4,6 +4,8 @@ import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
 
 interface ParsedEnv {
   functionArgs: string;
+  /** Sorted argument source texts — the order-independent identity of the head. */
+  argSignature: string;
   withPackages: boolean;
   categories: Map<string, string[]>;
 }
@@ -30,7 +32,14 @@ function parseEnv(content: string): ParsedEnv {
   // it would rewrite every existing file for no gain. Equality across layers is checked
   // separately, on a sorted normalisation, so `{ pkgs, packages }` and `{ packages, pkgs }`
   // are still recognised as the same head.
-  const functionArgs = `{ ${header.args.join(', ')}${header.hasEllipsis ? ', ...' : ''} }`;
+  // Emitted from each argument's own source text, so a default (`pkgs ? import <nixpkgs> {}`)
+  // survives the round trip. Rebuilding from names alone would drop it silently, and no
+  // *name* would be missing for the loss guard to catch.
+  const renderedArgs = header.args.map((name) => (header.argSources.get(name) ?? name).replace(/\s+/g, ' '));
+  const functionArgs = `{ ${renderedArgs.join(', ')}${header.hasEllipsis ? ', ...' : ''} }`;
+  // Compared as a sorted list of whole arguments, never by re-splitting the rendered
+  // string on commas — a default may itself contain a comma.
+  const argSignature = JSON.stringify([...renderedArgs].sort().concat(header.hasEllipsis ? ['...'] : []));
 
   // 2. Detect the optional `with packages;` prelude between the head and the attrset
   let cursor = header.colonIndex + 1;
@@ -71,6 +80,20 @@ function parseEnv(content: string): ParsedEnv {
       currentCategory = catMatch[1];
       categories.set(currentCategory, []);
       inList = true;
+      // A single-line list — `dev = [ git go-task ];` — closes on this same line. The
+      // scanner used to record the category, drop every item on the line, and leave
+      // `inList` true, so the *next* category's items were then appended to this one.
+      // Both halves of that are silent corruption the loss guard cannot see: package
+      // names inside a list are values, not bindings.
+      const rest = trimmed.slice(catMatch[0].length);
+      const closing = rest.indexOf(']');
+      if (closing !== -1) {
+        for (const item of rest.slice(0, closing).trim().split(/\s+/).filter(Boolean)) {
+          categories.get(currentCategory)!.push(item);
+        }
+        inList = false;
+        currentCategory = null;
+      }
       continue;
     }
 
@@ -101,7 +124,7 @@ function parseEnv(content: string): ParsedEnv {
     );
   }
 
-  return { functionArgs, withPackages, categories };
+  return { functionArgs, argSignature, withPackages, categories };
 }
 
 // ─── Merge ───────────────────────────────────────────────────────────────────
@@ -113,17 +136,10 @@ export function mergeEnv(
 
   // Function args: same set across all inputs — fail if different. Compared on a sorted
   // normalisation so a pure reordering (or a reflow across lines) is not a conflict.
-  const normalize = (args: string): string =>
-    `{ ${(args.match(/^\{(.*)\}$/s)?.[1] ?? args)
-      .split(',')
-      .map((a) => a.trim())
-      .filter(Boolean)
-      .sort()
-      .join(', ')} }`;
   const firstArgs = parsed[0].functionArgs;
-  const firstNormalized = normalize(firstArgs);
+  const firstNormalized = parsed[0].argSignature;
   for (const p of parsed) {
-    if (normalize(p.functionArgs) !== firstNormalized) {
+    if (p.argSignature !== firstNormalized) {
       throw new Error(
         `env.nix function args mismatch: "${p.functionArgs}" vs "${firstArgs}"`,
       );

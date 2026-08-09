@@ -1,6 +1,6 @@
 // merge-packages.ts — Parser, merger, and pretty-printer for packages.nix files
 
-import { findFunctionHeader } from './loss-guard.ts';
+import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
 
 interface InheritIdentifier {
   id: string;
@@ -26,6 +26,8 @@ interface SubBlock {
 
 interface ParsedPackages {
   functionArgs: string[];
+  /** Argument name → its full source text, so `?` defaults survive re-printing. */
+  argSources: Map<string, string>;
   hasEllipsis: boolean;
   subBlocks: Map<string, SubBlock>;
   mergeLine: string[];
@@ -131,12 +133,18 @@ function parsePackages(content: string): ParsedPackages {
     );
   }
   const functionArgs = [...header.args];
+  const argSources = header.argSources;
   const hasEllipsis = header.hasEllipsis;
+
+  // Every structural scan below runs on the masked source, so an `all = rec {` or an `in`
+  // sitting inside a comment or a string literal cannot be mistaken for the real one.
+  // Offsets are preserved by the masker, so the slices still come from `content`.
+  const code = maskNixTrivia(content);
 
   // 2. Find `all = rec {` and extract the outer block content
   const subBlocks = new Map<string, SubBlock>();
 
-  const allMatch = content.indexOf('all = rec {');
+  const allMatch = code.search(/\ball\s*=\s*rec\s*\{/);
   if (allMatch === -1) {
     throw new Error(
       'Cannot merge nix/packages.nix: the `all = rec { ... }` registry block was not ' +
@@ -144,7 +152,7 @@ function parsePackages(content: string): ParsedPackages {
         'empty skeleton that silently drops every package.',
     );
   }
-  const braceStart = allMatch + 'all = rec '.length; // position of '{'
+  const braceStart = code.indexOf('{', allMatch); // position of '{'
   const closingIdx = findMatching(content, '{', '}', braceStart);
   if (closingIdx === -1) {
     throw new Error(
@@ -161,7 +169,7 @@ function parsePackages(content: string): ParsedPackages {
   let mergeLine: string[] = [];
   // Look for `\nin\n` or `\nin ` pattern (the `let ... in` keyword)
   const inRegex = /\bin\s*\n/gs;
-  const inMatches = [...content.matchAll(inRegex)];
+  const inMatches = [...code.matchAll(inRegex)];
   // Take the last match which should be the top-level `in`
   let afterIn = '';
   if (inMatches.length > 0) {
@@ -192,7 +200,7 @@ function parsePackages(content: string): ParsedPackages {
     );
   }
 
-  return { functionArgs, hasEllipsis, subBlocks, mergeLine };
+  return { functionArgs, argSources, hasEllipsis, subBlocks, mergeLine };
 }
 
 function parseSubBlocks(outerBody: string, subBlocks: Map<string, SubBlock>) {
@@ -407,19 +415,31 @@ function parseEntries(innerBody: string, entries: SubBlockEntry[]) {
 export function mergePackages(
   sortedFiles: { content: string; layer: number; template: string }[],
 ): string {
+  if (sortedFiles.length === 0) {
+    // Without this, zero inputs produce an empty model and the pretty-printer happily
+    // emits the 42-byte skeleton — the exact shape @3 exists to make impossible. The
+    // loss guard cannot catch it either: nothing was lost, because nothing was supplied.
+    throw new Error(
+      'Cannot merge nix/packages.nix: no files were provided; at least one is required.',
+    );
+  }
   const parsed = sortedFiles.map((f) => parsePackages(f.content));
 
   // Function args: concat all, dedupe, sort. `...` is not an argument name — it is a
   // property of the head — so it is tracked separately and always rendered last.
   const allArgs = new Set<string>();
+  const argSources = new Map<string, string>();
   let hasEllipsis = false;
   for (const p of parsed) {
     for (const arg of p.functionArgs) {
       allArgs.add(arg);
+      // Highest layer wins, consistent with every other LWW axis in this merger.
+      const source = p.argSources.get(arg);
+      if (source !== undefined) argSources.set(arg, source.replace(/\s+/g, ' '));
     }
     if (p.hasEllipsis) hasEllipsis = true;
   }
-  const functionArgs = [...allArgs].sort();
+  const functionArgs = [...allArgs].sort().map((name) => argSources.get(name) ?? name);
 
   // Sub-blocks: merge by name
   const mergedBlocks = new Map<string, SubBlock>();

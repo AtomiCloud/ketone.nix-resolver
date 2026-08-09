@@ -1,5 +1,6 @@
 import { test, expect, describe } from 'bun:test';
 import { resolver } from '../index.ts';
+import { mergePackages } from '../cyan/src/merge-packages.ts';
 import {
   assertNoLoss,
   findFunctionHeader,
@@ -98,9 +99,14 @@ describe('assertNoLoss', () => {
   });
 
   test('accepts a binding re-rendered as an inherit and vice versa', () => {
-    // `a = b;` and `inherit b;` both keep the name reachable; re-rendering between them
-    // is a legitimate thing for a pretty-printer to do and must not read as loss.
-    expect(() => assertNoLoss('nix/x.nix', ['{ a }:\n{ shellHook = a; }\n'], '{ a }:\n{ inherit shellHook; }\n')).not.toThrow();
+    // `shellHook = shellHook;` and `inherit shellHook;` are the same expression written
+    // two ways; re-rendering between them is a legitimate thing for a pretty-printer to
+    // do and must not read as loss. Asserted in BOTH directions — checking only one was
+    // the bug that made the equivalence comment untrue of the code.
+    const explicit = '{ shellHook }:\n{ shellHook = shellHook; }\n';
+    const inherited = '{ shellHook }:\n{ inherit shellHook; }\n';
+    expect(() => assertNoLoss('nix/x.nix', [explicit], inherited)).not.toThrow();
+    expect(() => assertNoLoss('nix/x.nix', [inherited], explicit)).not.toThrow();
   });
 
   test('tolerates last-write-wins on a value, which is documented merge semantics', () => {
@@ -245,5 +251,82 @@ describe('shells.nix inherit forms', () => {
     const content = '{ pkgs, env }:\nwith env;\n{\n  cd = pkgs.mkShell {\n    buildInputs = main;\n    inherit shellHook name;\n  };\n}\n';
     const merged = await resolver({ files: [variation('nix/shells.nix', content)] } as never);
     expect(merged.content).toContain('inherit name shellHook;');
+  });
+});
+
+describe('review findings — CodeRabbit, PR #10', () => {
+  test('an indented string does not end early on ${} or an escaped quote', () => {
+    // `'''` escapes a literal `''` and `''${` escapes an interpolation. Closing at the
+    // first `''` handed the rest of a shellHook body to the scanner as Nix code, which
+    // then became phantom material assertNoLoss would demand in every output.
+    const source = "{ pkgs }:\n{\n  hook = ''\n    echo ''${NOT_A_BINDING}\n    ghost = 1;\n  '';\n}\n";
+    const inventory = inventoryMaterial(source);
+    expect(inventory.bindings.has('ghost')).toBe(false);
+    expect(inventory.bindings.has('NOT_A_BINDING')).toBe(false);
+    expect(inventory.bindings.has('hook')).toBe(true);
+  });
+
+  test('a dotted with-prelude is inventoried', () => {
+    expect([...inventoryMaterial('{ pkgs }:\nwith pkgs.lib;\n{ a = 1; }\n').withPreludes]).toEqual(['pkgs.lib']);
+  });
+
+  test('`with rec { ... };` is not mistaken for a prelude', () => {
+    // Widening the prelude capture to any expression would stop at the first inner `;`
+    // and invent a prelude no output could ever satisfy.
+    const inventory = inventoryMaterial('{ pkgs }:\nwith rec {\n  a = 1;\n};\n{ b = a; }\n');
+    expect([...inventory.withPreludes]).toEqual([]);
+  });
+
+  test('a function argument default survives the round trip', async () => {
+    // The name survives either way, so the loss guard cannot see this one — only an
+    // explicit check can.
+    const content = '{ packages, pkgs ? import <nixpkgs> { } }:\nwith packages;\n{\n  dev = [\n    git\n  ];\n}\n';
+    const merged = await resolver({ files: [variation('nix/env.nix', content)] } as never);
+    expect(merged.content).toStartWith('{ packages, pkgs ? import <nixpkgs> { } }:');
+  });
+
+  test('a single-line category list keeps its items and closes the category', async () => {
+    // Items on the `key = [ ... ];` line were dropped, and the list stayed "open" so the
+    // NEXT category's items were appended to it. Both are invisible to the loss guard:
+    // package names inside a list are values, not bindings.
+    const content = '{ pkgs, packages }:\nwith packages;\n{\n  dev = [ git go-task ];\n\n  lint = [ shellcheck ];\n}\n';
+    const merged = await resolver({ files: [variation('nix/env.nix', content)] } as never);
+    expect(merged.content).toContain('dev = [\n    git\n    go-task\n  ];');
+    expect(merged.content).toContain('lint = [\n    shellcheck\n  ];');
+  });
+
+  test('buildInputs splits on ++ at depth zero only', async () => {
+    const content = '{ pkgs, env }:\nwith env;\n{\n  cd = pkgs.mkShell {\n    buildInputs = (main ++ lint) ++ system;\n  };\n}\n';
+    const merged = await resolver({ files: [variation('nix/shells.nix', content)] } as never);
+    expect(merged.content).toContain('buildInputs = (main ++ lint) ++ system;');
+  });
+
+  test('packages.nix refuses zero inputs rather than printing the skeleton', () => {
+    expect(() => mergePackages([])).toThrow(/no files were provided/);
+  });
+
+  test('a commented-out `all = rec {` does not become the registry block', async () => {
+    const content = [
+      '{ atomi }:',
+      '# all = rec { decoy = 1; };',
+      'let',
+      '  all = rec {',
+      '    atomipkgs = (',
+      '      with atomi;',
+      '      {',
+      '        inherit',
+      '          releaser',
+      '          ;',
+      '      }',
+      '    );',
+      '  };',
+      'in',
+      'with all;',
+      'atomipkgs',
+      '',
+    ].join('\n');
+    const merged = await resolver({ files: [variation('nix/packages.nix', content)] } as never);
+    expect(merged.content).toContain('releaser');
+    expect(merged.content).not.toContain('decoy');
   });
 });

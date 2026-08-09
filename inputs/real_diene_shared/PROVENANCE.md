@@ -1,9 +1,8 @@
 # `real_diene_shared` — provenance
 
 All six files under `workspace/` are the **verbatim** resolver-managed files of the diene
-cascade's shared node, copied on 2026-08-09 from
-`AtomiCloud/shared` at commit `99a297e94fb55c4f26707e43ae10af20595d89ff`
-(working tree `/home/kirin/.kteam/mse4qqw4-b0c895b9/wt/shared`).
+cascade's shared node, copied on 2026-08-09 from `AtomiCloud/shared` at commit
+`99a297e94fb55c4f26707e43ae10af20595d89ff`.
 
 They are here because the repository's own fixtures did not contain a single
 treefmt-formatted **multi-line function head**, which is the shape every canonical file

@@ -27,6 +27,8 @@ interface ParsedShell {
 
 interface ParsedShells {
   functionArgs: string[];
+  /** Argument name → its full source text, so `?` defaults survive re-printing. */
+  argSources: Map<string, string>;
   hasEllipsis: boolean;
   /** `with X;` preludes between the head and the attrset, in source order. */
   preludes: string[];
@@ -66,6 +68,29 @@ function entryTerminator(code: string, pos: number, limit: number): number {
     } else if (ch === ';' && depth === 0) return i;
   }
   return -1;
+}
+
+/**
+ * Split a `buildInputs` right-hand side on the `++` operators that are actually at the
+ * top level. A plain `rhs.split('++')` would also cut inside `(a ++ b) ++ c` or inside a
+ * list literal, producing unbalanced fragments that are then re-joined into broken Nix.
+ */
+function splitConcat(content: string, code: string, start: number, limit: number): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let segment = start;
+  for (let i = start; i < limit; i++) {
+    const ch = code[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (depth === 0 && ch === '+' && code[i + 1] === '+') {
+      parts.push(content.slice(segment, i));
+      i++;
+      segment = i + 1;
+    }
+  }
+  parts.push(content.slice(segment, limit));
+  return parts.map((p) => p.trim()).filter(Boolean);
 }
 
 function refuse(detail: string): never {
@@ -147,7 +172,13 @@ function parseShells(content: string): ParsedShells {
     );
   }
 
-  return { functionArgs: [...header.args], hasEllipsis: header.hasEllipsis, preludes, shells };
+  return {
+    functionArgs: [...header.args],
+    argSources: header.argSources,
+    hasEllipsis: header.hasEllipsis,
+    preludes,
+    shells,
+  };
 }
 
 function parseShellBody(
@@ -198,8 +229,8 @@ function parseShellBody(
             '`inherit ...;` are modelled. Refusing rather than dropping it from the merged output.',
         );
       }
-      const rhs = entry.slice(assignment[0].length).trim();
-      for (const part of rhs.split('++').map((p) => p.trim()).filter(Boolean)) {
+      const rhsStart = cursor + assignment[0].length;
+      for (const part of splitConcat(content, code, rhsStart, terminator)) {
         buildInputs.push(part);
       }
     }
@@ -223,8 +254,12 @@ export function mergeShells(
   // Function args: exact match once normalised. Unioning them would be worse than
   // refusing — flake.nix calls this file with a fixed argument set, so an argument no
   // caller supplies is an evaluation error rather than a merge.
+  // Compared on the whole argument text, not just the name, so a differing `?` default is
+  // a conflict rather than something the first layer silently imposes on the rest.
+  const rendered = (p: ParsedShells): string[] =>
+    p.functionArgs.map((name) => (p.argSources.get(name) ?? name).replace(/\s+/g, ' '));
   const signature = (p: ParsedShells): string =>
-    `{ ${[...p.functionArgs].sort().join(', ')}${p.hasEllipsis ? ', ...' : ''} }`;
+    `{ ${[...rendered(p)].sort().join(', ')}${p.hasEllipsis ? ', ...' : ''} }`;
   const firstSignature = signature(parsed[0]);
   for (const p of parsed) {
     if (signature(p) !== firstSignature) {
@@ -260,7 +295,7 @@ export function mergeShells(
   }
 
   return prettyPrint(
-    [...parsed[0].functionArgs].sort(),
+    [...rendered(parsed[0])].sort(),
     parsed[0].hasEllipsis,
     parsed[0].preludes,
     mergedInputs,

@@ -68,8 +68,28 @@ export function maskNixTrivia(source: string): string {
       continue;
     }
     if (source.startsWith("''", index)) {
-      const close = source.indexOf("''", index + 2);
-      const stop = close === -1 ? source.length : close + 2;
+      // Inside an indented string, `''` is not automatically the terminator: `'''`
+      // escapes a literal `''`, `''${` escapes an interpolation, and `''\` escapes the
+      // next character. Stopping at the first `''` would end the string early and hand
+      // the rest of a shellHook body to the scanner as if it were Nix code — which then
+      // becomes phantom material that assertNoLoss demands in the output.
+      let scan = index + 2;
+      while (scan < source.length) {
+        if (source.startsWith("'''", scan) || source.startsWith("''${", scan)) {
+          scan += 3;
+          continue;
+        }
+        if (source.startsWith("''\\", scan)) {
+          scan += 4;
+          continue;
+        }
+        if (source.startsWith("''", scan)) {
+          scan += 2;
+          break;
+        }
+        scan++;
+      }
+      const stop = Math.min(scan, source.length);
       output += spacesLike(source.slice(index, stop));
       index = stop;
       continue;
@@ -123,6 +143,14 @@ function splitTopLevel(value: string): string[] {
 export interface FunctionHeader {
   /** Argument names, in source order, without `...` and without defaults. */
   args: string[];
+  /**
+   * Name → the argument's full source text, so a default survives a re-printed head.
+   * `{ pkgs ? import <nixpkgs> { } }` yields `pkgs` in `args` and the whole
+   * `pkgs ? import <nixpkgs> { }` here; a merger that rebuilds the head from names
+   * alone would silently drop the default, and no name would be missing for
+   * assertNoLoss to catch.
+   */
+  argSources: Map<string, string>;
   /** Byte offset of the `:` that ends the header. */
   colonIndex: number;
   /** Byte offset of the `{` that opens the header. */
@@ -162,20 +190,38 @@ export function findFunctionHeader(source: string): FunctionHeader | null {
   while (colon < code.length && /\s/.test(code[colon])) colon++;
   if (code[colon] !== ':') return null;
 
-  const parts = splitTopLevel(code.slice(open + 1, close))
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-  const args = parts
-    .filter((part) => part !== '...')
-    .map((part) => part.match(/^([a-zA-Z_][a-zA-Z0-9_'-]*)\b/)?.[1])
-    .filter((part): part is string => part !== undefined);
+  // Split on the masked text so a comma inside a comment or a default's string literal
+  // cannot split an argument, but slice the *source* so defaults keep their real bytes.
+  const bodyStart = open + 1;
+  const masked = code.slice(bodyStart, close);
+  const args: string[] = [];
+  const argSources = new Map<string, string>();
+  let hasEllipsis = false;
+  let offset = 0;
+  for (const maskedPart of splitTopLevel(masked)) {
+    const start = offset;
+    offset += maskedPart.length + 1; // +1 for the comma splitTopLevel consumed
+    const trimmed = maskedPart.trim();
+    if (trimmed === '...') {
+      hasEllipsis = true;
+      continue;
+    }
+    if (trimmed.length === 0) continue;
+    const name = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_'-]*)\b/)?.[1];
+    if (name === undefined) continue;
+    const leading = maskedPart.length - maskedPart.trimStart().length;
+    const from = bodyStart + start + leading;
+    if (!argSources.has(name)) args.push(name);
+    argSources.set(name, source.slice(from, from + trimmed.length));
+  }
 
   return {
-    args: [...new Set(args)],
+    args,
+    argSources,
     colonIndex: colon,
     openIndex: open,
     closeIndex: close,
-    hasEllipsis: parts.includes('...'),
+    hasEllipsis,
   };
 }
 
@@ -216,8 +262,14 @@ export function inventoryMaterial(source: string): MaterialInventory {
       inherited.add(identifier);
     }
   }
-  for (const match of code.matchAll(/\bwith\s+([a-zA-Z_][a-zA-Z0-9_'-]*)\s*;/g)) {
-    withPreludes.add(match[1]);
+  // A prelude may be a dotted path (`with pkgs.lib;`), not just a bare name. Matching only
+  // a single identifier left those invisible to the invariant. The path is deliberately
+  // not widened to any expression: `with rec { a = 1; };` in flake.nix would otherwise
+  // capture up to its first inner `;` and invent a prelude that no output can satisfy.
+  for (const match of code.matchAll(
+    /\bwith\s+([a-zA-Z_][a-zA-Z0-9_'-]*(?:\s*\.\s*[a-zA-Z_][a-zA-Z0-9_'-]*)*)\s*;/g,
+  )) {
+    withPreludes.add(match[1].replace(/\s+/g, ''));
   }
 
   return { args, bindings, inherited, withPreludes };
@@ -258,9 +310,14 @@ function lostUnits(inputs: string[], output: string): LostUnit[] {
     const expected = inventoryMaterial(input);
     for (const value of expected.args) check('arg', value, actual.args);
     for (const value of expected.withPreludes) check('with', value, actual.withPreludes);
-    for (const value of expected.inherited) check('inherit', value, actual.inherited);
     // An inherited name may be re-rendered as an explicit binding and vice versa; accept
-    // either, because both keep the name reachable in the merged expression.
+    // either, in BOTH directions, because both keep the name reachable in the merged
+    // expression. Checking `inherit` only against `inherited` would refuse the
+    // inherit → binding rewrite that this very comment says is allowed.
+    for (const value of expected.inherited) {
+      if (actual.inherited.has(value) || actual.bindings.has(value)) continue;
+      check('inherit', value, actual.inherited);
+    }
     for (const value of expected.bindings) {
       if (actual.bindings.has(value) || actual.inherited.has(value)) continue;
       check('binding', value, actual.bindings);
