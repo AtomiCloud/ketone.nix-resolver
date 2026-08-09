@@ -706,3 +706,45 @@ tests:
         origin:
           template: template-a
           layer: 0
+
+  # Regression: treefmt/nixfmt breaks a function head across lines once it is long
+  # enough. Every hand-written fixture above happens to keep its head on line 1, which
+  # is exactly why the one-line-only head regexes in parsePackages and parseShells went
+  # unnoticed until the diene cascade hit them. These two carry the multi-line shape.
+  - name: packages_multiline_head
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/packages_multiline_head
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/packages_multiline_head/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  - name: shells_multiline_head
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/shells_multiline_head
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/shells_multiline_head/template-a
+        origin:
+          template: template-a
+          layer: 0
+
+  # The diene cascade's shared node, verbatim — all six resolver-managed files at once.
+  # See inputs/real_diene_shared/PROVENANCE.md.
+  - name: real_diene_shared_self
+    expected:
+      type: snapshot
+      value:
+        path: ./snapshots/real_diene_shared_self
+    config: {}
+    resolver_inputs:
+      - path: ./inputs/real_diene_shared/workspace
+        origin:
+          template: workspace
+          layer: 0

@@ -1,135 +1,248 @@
 // merge-shells.ts — Parser, merger, and pretty-printer for shells.nix files
+//
+// The line-oriented parser this replaced modelled a shells.nix as: line 0 is the whole
+// function head, line 1 may be `with env;`, and everything after that is scanned with
+// `trimmed === '{'` tests. A canonical treefmt-formatted file breaks every one of those
+// assumptions at once — the head spans five lines, so `functionArgs` came back empty, the
+// prelude check looked at `pkgs,` instead of `with env;`, and `hasShellHook` (derived from
+// the empty argument list) was false. The merger emitted
+//
+//     {  }:
+//     {
+//       cd = pkgs.mkShell { buildInputs = main ++ system; };
+//       ...
+//     }
+//
+// with no head, no prelude and no `inherit shellHook;` — a file that cannot evaluate — and
+// exited success. Everything below scans structurally over brace/paren depth with comments
+// and string literals masked out, and refuses on any shape it cannot account for.
+
+import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
 
 interface ParsedShell {
   buildInputs: string[];
+  /** Identifiers pulled in by `inherit ...;` inside the shell, e.g. `shellHook`. */
+  inherits: string[];
 }
 
 interface ParsedShells {
   functionArgs: string[];
-  withEnv: boolean;
+  /** Argument name → its full source text, so `?` defaults survive re-printing. */
+  argSources: Map<string, string>;
+  hasEllipsis: boolean;
+  /** `with X;` preludes between the head and the attrset, in source order. */
+  preludes: string[];
   shells: Map<string, ParsedShell>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function findMatchingBrace(text: string, openIdx: number): number {
-  let depth = 1;
-  let i = openIdx;
-  while (i < text.length && depth > 0) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') depth--;
-    if (depth === 0) return i;
-    i++;
+/** `open` points at the opening brace; returns the index of its match, or -1. */
+function matchingBrace(code: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
   }
   return -1;
+}
+
+function skipWhitespace(code: string, pos: number): number {
+  let i = pos;
+  while (i < code.length && /\s/.test(code[i])) i++;
+  return i;
+}
+
+/** Index of the `;` that terminates the entry starting at `pos`, at bracket depth 0. */
+function entryTerminator(code: string, pos: number, limit: number): number {
+  let depth = 0;
+  for (let i = pos; i < limit; i++) {
+    const ch = code[i];
+    if (ch === '{' || ch === '[' || ch === '(') depth++;
+    else if (ch === '}' || ch === ']' || ch === ')') {
+      if (depth === 0) return -1;
+      depth--;
+    } else if (ch === ';' && depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Split a `buildInputs` right-hand side on the `++` operators that are actually at the
+ * top level. A plain `rhs.split('++')` would also cut inside `(a ++ b) ++ c` or inside a
+ * list literal, producing unbalanced fragments that are then re-joined into broken Nix.
+ */
+function splitConcat(content: string, code: string, start: number, limit: number): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let segment = start;
+  for (let i = start; i < limit; i++) {
+    const ch = code[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (depth === 0 && ch === '+' && code[i + 1] === '+') {
+      parts.push(content.slice(segment, i));
+      i++;
+      segment = i + 1;
+    }
+  }
+  parts.push(content.slice(segment, limit));
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+function refuse(detail: string): never {
+  throw new Error(`Cannot merge nix/shells.nix: ${detail}`);
 }
 
 // ─── Parse ───────────────────────────────────────────────────────────────────
 
 function parseShells(content: string): ParsedShells {
-  const lines = content.split('\n');
+  // Comments and string literals are blanked out at identical offsets, so every scan
+  // below can use `code` for structure and `content` for the bytes it keeps.
+  const code = maskNixTrivia(content);
 
-  // 1. Extract function args: { pkgs, packages, env, shellHook }:
-  let functionArgs: string[] = [];
-  let lineIdx = 0;
-
-  const argsMatch = lines[0]?.match(/^\s*\{([^}]+)\}\s*:\s*$/);
-  if (argsMatch) {
-    functionArgs = argsMatch[1].split(',').map((a) => a.trim()).filter(Boolean);
-    lineIdx = 1;
+  const header = findFunctionHeader(content);
+  if (!header) {
+    refuse(
+      'no function argument set was found. The file must begin with a `{ ... }:` head ' +
+        '(single-line or multi-line); refusing rather than emitting a headless skeleton.',
+    );
   }
 
-  // 2. Detect `with env;` line
-  let withEnv = false;
-  if (lineIdx < lines.length) {
-    const withMatch = lines[lineIdx].match(/^\s*with\s+env\s*;\s*$/);
-    if (withMatch) {
-      withEnv = true;
-      lineIdx++;
-    }
+  // `with env;` — and any other prelude — sits between the head and the attrset.
+  // A prelude may be a dotted path (`with pkgs.lib;`), matching what the loss guard
+  // inventories. Accepting only a bare identifier here would refuse a valid file: the
+  // prelude would not match, the scan would then not find `{`, and the merger would
+  // report a missing attribute set.
+  const preludes: string[] = [];
+  let pos = skipWhitespace(code, header.colonIndex + 1);
+  for (;;) {
+    const match = code.slice(pos).match(/^with\s+([a-zA-Z_][\w'-]*(?:\s*\.\s*[a-zA-Z_][\w'-]*)*)\s*;/);
+    if (!match) break;
+    preludes.push(match[1].replace(/\s+/g, ''));
+    pos = skipWhitespace(code, pos + match[0].length);
   }
 
-  // 3. Parse top-level attrset — each key is a shell name
+  if (code[pos] !== '{') {
+    refuse(
+      'the top-level shell attribute set was not found after the function head. ' +
+        'Expected `{ <name> = pkgs.mkShell { ... }; ... }`; refusing rather than emitting ' +
+        'an empty skeleton.',
+    );
+  }
+  const attrsetOpen = pos;
+  const attrsetClose = matchingBrace(code, attrsetOpen);
+  if (attrsetClose === -1) {
+    refuse('the top-level shell attribute set is unbalanced — its closing brace was not found.');
+  }
+
   const shells = new Map<string, ParsedShell>();
-  let inAttrset = false;
-  let currentShell: string | null = null;
-  let currentBuildInputs: string[] = [];
-  let inMkShell = false;
-  let mkShellDepth = 0;
+  let cursor = skipWhitespace(code, attrsetOpen + 1);
 
-  for (let i = lineIdx; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-
-    // Opening brace of top-level attrset
-    if (trimmed === '{') {
-      inAttrset = true;
-      continue;
+  while (cursor < attrsetClose) {
+    const rest = code.slice(cursor, attrsetClose);
+    const shellMatch = rest.match(/^([\w-]+)\s*=\s*pkgs\.mkShell\s*\{/);
+    if (!shellMatch) {
+      const offender = content.slice(cursor, Math.min(cursor + 60, attrsetClose)).trim().split('\n')[0];
+      refuse(
+        `unrecognised entry "${offender}" in the top-level attribute set. Every entry must ` +
+          'be `<name> = pkgs.mkShell { ... };`; refusing rather than dropping it.',
+      );
     }
 
-    // Closing brace of top-level attrset
-    if (trimmed === '}') {
-      if (inAttrset && currentShell !== null) {
-        shells.set(currentShell, { buildInputs: currentBuildInputs });
-        currentShell = null;
-        currentBuildInputs = [];
-      }
-      break;
+    const name = shellMatch[1];
+    const bodyOpen = cursor + shellMatch[0].length - 1;
+    const bodyClose = matchingBrace(code, bodyOpen);
+    if (bodyClose === -1 || bodyClose > attrsetClose) {
+      refuse(`shell "${name}" has an unbalanced \`pkgs.mkShell { ... }\` block.`);
     }
 
-    if (!inAttrset) continue;
+    shells.set(name, parseShellBody(content, code, bodyOpen + 1, bodyClose, name));
 
-    // Shell assignment: name = pkgs.mkShell {
-    const shellMatch = trimmed.match(/^([\w-]+)\s*=\s*pkgs\.mkShell\s*\{/);
-    if (shellMatch) {
-      if (currentShell !== null) {
-        shells.set(currentShell, { buildInputs: currentBuildInputs });
-      }
-      currentShell = shellMatch[1];
-      currentBuildInputs = [];
-      inMkShell = true;
-      mkShellDepth = 1;
-      continue;
+    cursor = skipWhitespace(code, bodyClose + 1);
+    if (code[cursor] !== ';') {
+      refuse(`shell "${name}" is not terminated by a \`;\` after its \`pkgs.mkShell\` block.`);
     }
-
-    // Inside mkShell block
-    if (inMkShell && currentShell) {
-      // Track brace depth
-      for (const ch of trimmed) {
-        if (ch === '{') mkShellDepth++;
-        else if (ch === '}') mkShellDepth--;
-      }
-
-      // buildInputs = ...;
-      const buildInputsMatch = trimmed.match(/^buildInputs\s*=\s*(.+);\s*$/);
-      if (buildInputsMatch) {
-        const rhs = buildInputsMatch[1];
-        // Split on ++ and collect identifiers
-        const parts = rhs.split('++').map((p) => p.trim()).filter(Boolean);
-        currentBuildInputs.push(...parts);
-      }
-
-      // inherit shellHook; — expected, skip
-      if (trimmed.match(/^inherit\s+shellHook\s*;/)) continue;
-
-      // Any other line inside mkShell that's not buildInputs or inherit shellHook → unknown field
-      if (trimmed && !trimmed.startsWith('#') && !buildInputsMatch && !trimmed.match(/^inherit\s+shellHook\s*;/)) {
-        // Only flag if we're at the right depth (inside the mkShell block, not closing it)
-        if (mkShellDepth > 0 && trimmed !== '}') {
-          throw new Error(
-            `shells.nix: unknown field "${trimmed.split(/[=;]/)[0].trim()}" inside shell "${currentShell}" — only "buildInputs" and "inherit shellHook;" are allowed`,
-          );
-        }
-      }
-
-      // End of mkShell block
-      if (mkShellDepth <= 0) {
-        inMkShell = false;
-      }
-      continue;
-    }
+    cursor = skipWhitespace(code, cursor + 1);
   }
 
-  return { functionArgs, withEnv, shells };
+  if (shells.size === 0) {
+    refuse(
+      'the top-level attribute set declares no shells. Refusing rather than emitting an ' +
+        'empty skeleton that silently drops every dev shell.',
+    );
+  }
+
+  return {
+    functionArgs: [...header.args],
+    argSources: header.argSources,
+    hasEllipsis: header.hasEllipsis,
+    preludes,
+    shells,
+  };
+}
+
+function parseShellBody(
+  content: string,
+  code: string,
+  start: number,
+  limit: number,
+  name: string,
+): ParsedShell {
+  const buildInputs: string[] = [];
+  const inherits: string[] = [];
+  let cursor = skipWhitespace(code, start);
+
+  while (cursor < limit) {
+    const terminator = entryTerminator(code, cursor, limit);
+    if (terminator === -1) {
+      refuse(`an entry inside shell "${name}" is not terminated by a \`;\`.`);
+    }
+    const entry = content.slice(cursor, terminator);
+    const entryCode = code.slice(cursor, terminator);
+
+    const inheritMatch = entryCode.match(/^inherit\b([\s\S]*)$/);
+    if (inheritMatch) {
+      if (inheritMatch[1].trimStart().startsWith('(')) {
+        // `inherit (src) a b;` binds a/b from `src`, not from the enclosing scope.
+        // Unioning those identifiers with plain inherits would silently change where
+        // they resolve from, so refuse rather than mangle a shape we do not model.
+        refuse(
+          `shell "${name}" uses \`inherit (<source>) ...;\`, which this merger does not ` +
+            'model. Refusing rather than re-scoping the inherited names.',
+        );
+      }
+      // `inherit shellHook;` — and any other inherited binding — must survive verbatim.
+      // The old parser matched only the literal `inherit shellHook;` and re-derived it
+      // from the (empty) argument list, so it was dropped whenever the head failed to
+      // parse. Collect the identifiers instead.
+      for (const identifier of inheritMatch[1].match(/[a-zA-Z_][\w'-]*/g) ?? []) {
+        if (!inherits.includes(identifier)) inherits.push(identifier);
+      }
+    } else {
+      const assignment = entryCode.match(/^([\w-]+)\s*=\s*/);
+      if (!assignment) {
+        refuse(`unrecognised entry "${entry.trim().split('\n')[0]}" inside shell "${name}".`);
+      }
+      if (assignment[1] !== 'buildInputs') {
+        refuse(
+          `unknown field "${assignment[1]}" inside shell "${name}" — only "buildInputs" and ` +
+            '`inherit ...;` are modelled. Refusing rather than dropping it from the merged output.',
+        );
+      }
+      const rhsStart = cursor + assignment[0].length;
+      for (const part of splitConcat(content, code, rhsStart, terminator)) {
+        buildInputs.push(part);
+      }
+    }
+
+    cursor = skipWhitespace(code, terminator + 1);
+  }
+
+  return { buildInputs, inherits };
 }
 
 // ─── Merge ───────────────────────────────────────────────────────────────────
@@ -138,77 +251,88 @@ export function mergeShells(
   sortedFiles: { content: string; layer: number; template: string }[],
 ): string {
   if (sortedFiles.length === 0) {
-    throw new Error('shells.nix merge requires at least one input file');
+    refuse('no files were provided; at least one is required.');
   }
   const parsed = sortedFiles.map((f) => parseShells(f.content));
 
-  // Function args: exact match — fail if different
-  const firstArgs = [...parsed[0].functionArgs].sort();
+  // Function args: exact match once normalised. Unioning them would be worse than
+  // refusing — flake.nix calls this file with a fixed argument set, so an argument no
+  // caller supplies is an evaluation error rather than a merge.
+  // Compared on the whole argument text, not just the name, so a differing `?` default is
+  // a conflict rather than something the first layer silently imposes on the rest.
+  const rendered = (p: ParsedShells): string[] =>
+    p.functionArgs.map((name) => (p.argSources.get(name) ?? name).replace(/\s+/g, ' '));
+  const signature = (p: ParsedShells): string =>
+    `{ ${[...rendered(p)].sort().join(', ')}${p.hasEllipsis ? ', ...' : ''} }`;
+  const firstSignature = signature(parsed[0]);
   for (const p of parsed) {
-    const pArgs = [...p.functionArgs].sort();
-    if (pArgs.length !== firstArgs.length || !pArgs.every((a, i) => a === firstArgs[i])) {
-      throw new Error(
-        `shells.nix function args mismatch: "[${p.functionArgs.join(', ')}]" vs "[${parsed[0].functionArgs.join(', ')}]"`,
+    if (signature(p) !== firstSignature) {
+      refuse(`function args mismatch: "${signature(p)}" vs "${firstSignature}"`);
+    }
+  }
+
+  // Preludes must agree too: `with env;` changes what every unqualified name in the file
+  // resolves to, so merging a file that has it with one that does not is not well-defined.
+  const firstPreludes = parsed[0].preludes.join(', ');
+  for (const p of parsed) {
+    if (p.preludes.join(', ') !== firstPreludes) {
+      refuse(
+        `prelude mismatch across inputs: "${p.preludes.map((w) => `with ${w};`).join(' ') || '(none)'}" ` +
+          `vs "${parsed[0].preludes.map((w) => `with ${w};`).join(' ') || '(none)'}"`,
       );
     }
   }
 
-  // with env; must be consistent across all inputs
-  const firstWithEnv = parsed[0].withEnv;
-  for (const p of parsed) {
-    if (p.withEnv !== firstWithEnv) {
-      throw new Error(
-        'shells.nix "with env;" presence mismatch across inputs',
-      );
-    }
-  }
-
-  // Merge shells: for each shell name, concat buildInputs, dedupe, sort
-  const mergedShells = new Map<string, Set<string>>();
+  // Merge shells: per shell name, union buildInputs and union inherited identifiers.
+  const mergedInputs = new Map<string, Set<string>>();
+  const mergedInherits = new Map<string, Set<string>>();
 
   for (const p of parsed) {
     for (const [name, shell] of p.shells) {
-      if (!mergedShells.has(name)) {
-        mergedShells.set(name, new Set());
+      if (!mergedInputs.has(name)) {
+        mergedInputs.set(name, new Set());
+        mergedInherits.set(name, new Set());
       }
-      for (const input of shell.buildInputs) {
-        mergedShells.get(name)!.add(input);
-      }
+      for (const input of shell.buildInputs) mergedInputs.get(name)!.add(input);
+      for (const identifier of shell.inherits) mergedInherits.get(name)!.add(identifier);
     }
   }
 
-  const hasShellHook = parsed[0].functionArgs.includes('shellHook');
-  return prettyPrint(parsed[0].functionArgs, firstWithEnv, mergedShells, hasShellHook);
+  return prettyPrint(
+    [...rendered(parsed[0])].sort(),
+    parsed[0].hasEllipsis,
+    parsed[0].preludes,
+    mergedInputs,
+    mergedInherits,
+  );
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
 
 function prettyPrint(
   functionArgs: string[],
-  withEnv: boolean,
+  hasEllipsis: boolean,
+  preludes: string[],
   shells: Map<string, Set<string>>,
-  hasShellHook: boolean,
+  inherits: Map<string, Set<string>>,
 ): string {
   const lines: string[] = [];
 
-  // Function args sorted alphabetically, with "..." at the end
-  const rest = functionArgs.filter((a) => a === '...');
-  const namedArgs = functionArgs.filter((a) => a !== '...').sort();
-  const sortedArgs = [...namedArgs, ...rest];
-  lines.push(`{ ${sortedArgs.join(', ')} }:`);
-  if (withEnv) {
-    lines.push('with env;');
+  // Function args sorted alphabetically, with `...` last
+  const headArgs = hasEllipsis ? [...functionArgs, '...'] : functionArgs;
+  lines.push(`{ ${headArgs.join(', ')} }:`);
+  for (const prelude of preludes) {
+    lines.push(`with ${prelude};`);
   }
 
-  // Opening brace
   lines.push('{');
 
-  // Shells sorted alphabetically
   const sortedShellNames = [...shells.keys()].sort();
 
   for (let si = 0; si < sortedShellNames.length; si++) {
     const shellName = sortedShellNames[si];
     const buildInputs = [...shells.get(shellName)!].sort();
+    const shellInherits = [...(inherits.get(shellName) ?? new Set<string>())].sort();
 
     // Blank line between shells (not before first)
     if (si > 0) {
@@ -217,8 +341,8 @@ function prettyPrint(
 
     lines.push(`  ${shellName} = pkgs.mkShell {`);
     lines.push(`    buildInputs = ${buildInputs.length === 0 ? '[]' : buildInputs.join(' ++ ')};`);
-    if (hasShellHook) {
-      lines.push('    inherit shellHook;');
+    if (shellInherits.length > 0) {
+      lines.push(`    inherit ${shellInherits.join(' ')};`);
     }
     lines.push('  };');
   }
