@@ -1,5 +1,7 @@
 // merge-packages.ts — Parser, merger, and pretty-printer for packages.nix files
 
+import { findFunctionHeader } from './loss-guard.ts';
+
 interface InheritIdentifier {
   id: string;
   comment?: string;
@@ -24,6 +26,7 @@ interface SubBlock {
 
 interface ParsedPackages {
   functionArgs: string[];
+  hasEllipsis: boolean;
   subBlocks: Map<string, SubBlock>;
   mergeLine: string[];
 }
@@ -104,41 +107,55 @@ function skipLexical(text: string, pos: number): number {
 // ─── Parse ───────────────────────────────────────────────────────────────────
 
 function parsePackages(content: string): ParsedPackages {
-  const lines = content.split('\n');
-
-  // 1. Extract function args: { pkgs, pkgs-2505, atomi }:
-  let functionArgs: string[] = [];
-  let lineIdx = 0;
-
-  const argsMatch = lines[0]?.match(/^\s*\{([^}]+)\}\s*:\s*$/);
-  if (argsMatch) {
-    functionArgs = argsMatch[1].split(',').map((a) => a.trim()).filter(Boolean);
-    lineIdx = 1;
+  // 1. Extract the function head.
+  //
+  // This used to be `lines[0].match(/^\s*\{([^}]+)\}\s*:\s*$/)` — a head that had to fit
+  // on line 1. treefmt/nixfmt breaks the head across lines as soon as it is long enough,
+  // which every canonical workspace file eventually is:
+  //
+  //     {
+  //       atomi,
+  //       pkgs-2605,
+  //       pkgs-unstable,
+  //     }:
+  //
+  // The regex missed it, `functionArgs` came back empty, and the pretty-printer emitted
+  // `{  }:` — a function taking no arguments whose body references all three of them.
+  // Broken Nix, exit success. Parse the head structurally instead.
+  const header = findFunctionHeader(content);
+  if (!header) {
+    throw new Error(
+      'Cannot merge nix/packages.nix: no function argument set was found. The file must ' +
+        'begin with a `{ ... }:` head (single-line or multi-line); refusing rather than ' +
+        'emitting a headless skeleton.',
+    );
   }
+  const functionArgs = [...header.args];
+  const hasEllipsis = header.hasEllipsis;
 
-  // 2. Find `let` line
-  for (let i = lineIdx; i < lines.length; i++) {
-    if (lines[i].trim() === 'let') {
-      lineIdx = i + 1;
-      break;
-    }
-  }
-
-  // 3. Find `all = rec {` and extract the outer block content
+  // 2. Find `all = rec {` and extract the outer block content
   const subBlocks = new Map<string, SubBlock>();
 
   const allMatch = content.indexOf('all = rec {');
-  if (allMatch !== -1) {
-    const braceStart = allMatch + 'all = rec '.length; // position of '{'
-    const closingIdx = findMatching(content, '{', '}', braceStart);
-
-    if (closingIdx !== -1) {
-      const outerBody = content.slice(braceStart + 1, closingIdx);
-      parseSubBlocks(outerBody, subBlocks);
-    }
+  if (allMatch === -1) {
+    throw new Error(
+      'Cannot merge nix/packages.nix: the `all = rec { ... }` registry block was not ' +
+        'found. This merger only models that shape; refusing rather than emitting an ' +
+        'empty skeleton that silently drops every package.',
+    );
   }
+  const braceStart = allMatch + 'all = rec '.length; // position of '{'
+  const closingIdx = findMatching(content, '{', '}', braceStart);
+  if (closingIdx === -1) {
+    throw new Error(
+      'Cannot merge nix/packages.nix: the `all = rec { ... }` block is unbalanced — its ' +
+        'closing brace was not found.',
+    );
+  }
+  const outerBody = content.slice(braceStart + 1, closingIdx);
+  parseSubBlocks(outerBody, subBlocks);
 
-  // 4. Parse final merge line after `in`
+  // 3. Parse final merge line after `in`
   // Find the `in` keyword that follows the `let` block.
   // It appears as a standalone line or as `\nin` followed by a newline or space.
   let mergeLine: string[] = [];
@@ -167,7 +184,15 @@ function parsePackages(content: string): ParsedPackages {
     }
   }
 
-  return { functionArgs, subBlocks, mergeLine };
+  if (mergeLine.length === 0) {
+    throw new Error(
+      'Cannot merge nix/packages.nix: no final `with all; a // b` merge expression was ' +
+        'found after `in`. Refusing rather than emitting a file whose registry blocks are ' +
+        'never combined.',
+    );
+  }
+
+  return { functionArgs, hasEllipsis, subBlocks, mergeLine };
 }
 
 function parseSubBlocks(outerBody: string, subBlocks: Map<string, SubBlock>) {
@@ -384,12 +409,15 @@ export function mergePackages(
 ): string {
   const parsed = sortedFiles.map((f) => parsePackages(f.content));
 
-  // Function args: concat all, dedupe, sort
+  // Function args: concat all, dedupe, sort. `...` is not an argument name — it is a
+  // property of the head — so it is tracked separately and always rendered last.
   const allArgs = new Set<string>();
+  let hasEllipsis = false;
   for (const p of parsed) {
     for (const arg of p.functionArgs) {
       allArgs.add(arg);
     }
+    if (p.hasEllipsis) hasEllipsis = true;
   }
   const functionArgs = [...allArgs].sort();
 
@@ -475,20 +503,22 @@ export function mergePackages(
   }
   const mergeLine = [...mergeNames].sort();
 
-  return prettyPrint(functionArgs, mergedBlocks, mergeLine);
+  return prettyPrint(functionArgs, hasEllipsis, mergedBlocks, mergeLine);
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
 
 function prettyPrint(
   functionArgs: string[],
+  hasEllipsis: boolean,
   subBlocks: Map<string, SubBlock>,
   mergeLine: string[],
 ): string {
   const lines: string[] = [];
 
-  // Function args sorted alphabetically
-  lines.push(`{ ${functionArgs.join(', ')} }:`);
+  // Function args sorted alphabetically, with `...` last if any input had it
+  const headArgs = hasEllipsis ? [...functionArgs, '...'] : functionArgs;
+  lines.push(`{ ${headArgs.join(', ')} }:`);
   lines.push('let');
   lines.push('  all = rec {');
 

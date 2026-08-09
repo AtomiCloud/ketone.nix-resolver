@@ -5,17 +5,21 @@ import { mergeFmt } from './cyan/src/merge-fmt.ts';
 import { mergePrecommit } from './cyan/src/merge-precommit.ts';
 import { mergePackages } from './cyan/src/merge-packages.ts';
 import { mergeShells } from './cyan/src/merge-shells.ts';
+import { withLossGuard, type MergeFn } from './cyan/src/loss-guard.ts';
 
-type MergeFn = (sortedFiles: { content: string; layer: number; template: string }[]) => string;
-
-const MERGERS: Record<string, MergeFn> = {
-  'flake.nix': mergeFlake,
-  'nix/env.nix': mergeEnv,
-  'nix/fmt.nix': mergeFmt,
-  'nix/packages.nix': mergePackages,
-  'nix/shells.nix': mergeShells,
-  'nix/pre-commit.nix': mergePrecommit,
-};
+// Every merger is wrapped in the @3 loss-refusal invariant. Wrapping the table rather
+// than each merger's body is deliberate: a merger added here later cannot forget it, and
+// there is exactly one place that decides what "lost material" means.
+const MERGERS: Record<string, MergeFn> = Object.fromEntries(
+  Object.entries({
+    'flake.nix': mergeFlake,
+    'nix/env.nix': mergeEnv,
+    'nix/fmt.nix': mergeFmt,
+    'nix/packages.nix': mergePackages,
+    'nix/shells.nix': mergeShells,
+    'nix/pre-commit.nix': mergePrecommit,
+  }).map(([file, merge]) => [file, withLossGuard(file, merge)]),
+);
 
 export async function resolver(input: ResolverInput): Promise<ResolverOutput> {
   const { files } = input;
