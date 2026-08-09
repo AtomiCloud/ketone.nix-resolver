@@ -1,6 +1,6 @@
 // merge-flake.ts — Parser and base-preserving merger for flake.nix files
 
-import { inventoryMaterial } from './loss-guard.ts';
+import { inventoryMaterial, maskNixTrivia } from './loss-guard.ts';
 
 interface InputEntry {
   name: string;
@@ -319,32 +319,54 @@ function commentsAbove(text: string, offset: number): string[] {
   return comments;
 }
 
-function parseWithRecAssignments(content: string): WithRecAssignment[] {
-  // Find "with rec {"
-  const match = content.match(/with\s+rec\s*\{/);
-  if (!match) return [];
+/**
+ * Locate the `with rec { ... }` block, scanning trivia-masked source so a brace, a
+ * `with rec` or a delimiter inside a comment or a string literal cannot be mistaken
+ * for structure. Offsets index the original `content` — `maskNixTrivia` blanks in
+ * place and keeps every position.
+ */
+function findWithRecBody(
+  content: string,
+  code: string,
+): { braceStart: number; closingIdx: number } | null {
+  const match = code.match(/with\s+rec\s*\{/);
+  if (!match) return null;
 
   const braceStart = match.index! + match[0].length;
-  const closingIdx = findMatchingBrace(content, braceStart);
-  if (closingIdx === -1) return [];
+  const closingIdx = findMatchingBrace(code, braceStart);
+  return closingIdx === -1 ? null : { braceStart, closingIdx };
+}
 
+function parseWithRecAssignments(content: string): WithRecAssignment[] {
+  const code = maskNixTrivia(content);
+  const block = findWithRecBody(content, code);
+  if (!block) return [];
+
+  const { braceStart, closingIdx } = block;
   const body = content.slice(braceStart, closingIdx);
+  // Structure is read off the masked copy; every slice is taken from the original at
+  // the same offsets, so comments and string contents travel with the assignment.
+  const scan = code.slice(braceStart, closingIdx);
 
   // Parse assignments by tracking brace depth
   const assignments: WithRecAssignment[] = [];
-  let currentName = '';
-  let currentBody = '';
+  let nameStart = -1;
+  let nameEnd = -1;
+  let rhsStart = -1;
   let depth = 0;
   let inAssignment = false;
-  let nameStart = 0;
 
   // The raw source of an assignment is spliced verbatim into another file when a
   // lower layer contributes a binding the base does not have, so every assignment
   // carries the offsets it was cut from alongside the parsed name and body.
-  const record = (rhs: string, end: number): void => {
+  const record = (end: number): void => {
     assignments.push({
-      name: currentName.trim(),
-      body: rhs.trim().replace(/\s*;\s*$/, ''),
+      // Whitespace and stray `;` between tokens are not part of the name.
+      name: body.slice(nameStart, nameEnd).replace(/[\s;]/g, ''),
+      body: body
+        .slice(rhsStart, end)
+        .trim()
+        .replace(/\s*;\s*$/, ''),
       raw: body.slice(nameStart, end).trimEnd(),
       indent: lineIndentAt(body, nameStart),
       leadingComments: commentsAbove(body, nameStart),
@@ -354,48 +376,39 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
   };
 
   let pos = 0;
-  while (pos < body.length) {
-    const char = body[pos];
+  while (pos < scan.length) {
+    const char = scan[pos];
     if (!inAssignment) {
-      if (char === '=' && currentName.trim()) {
+      if (char === '=' && nameStart !== -1) {
         inAssignment = true;
+        rhsStart = pos + 1;
         pos++;
         continue;
       }
-      if (char === '#') {
-        // Skip line comment to end of line
-        const nlIdx = body.indexOf('\n', pos);
-        pos = nlIdx === -1 ? body.length : nlIdx + 1;
-        currentName = '';
-        continue;
-      }
-      if (char !== ' ' && char !== '\n' && char !== '\t' && char !== ';') {
-        if (currentName === '') nameStart = pos;
-        currentName += char;
+      // `\r` counts as whitespace: a CRLF source must not start the name — and with
+      // it `indent`, `raw` and the splice offsets — on the previous line.
+      if (!/[\s;]/.test(char)) {
+        if (nameStart === -1) nameStart = pos;
+        nameEnd = pos + 1;
       }
       pos++;
     } else {
       if (char === '{') depth++;
       else if (char === '}') {
         depth--;
-        if (depth < 0) {
-          // End of with rec block or stray } — trim whitespace only,
-          // do not strip } from the body as it may belong to attrset syntax.
-          currentBody = currentBody.trim();
-          break;
-        }
+        // End of with rec block or stray } — the assignment stops here.
+        if (depth < 0) break;
       }
-      currentBody += char;
       pos++;
-      // Assignment ends with ; at depth 0
+      // Assignment ends with ; at depth 0. Only the trailing ; is stripped from the
+      // body; a } belongs to attrset/function-call syntax (e.g.
+      // "import ./nix/packages.nix { inherit pkgs; }") and must be preserved for
+      // callers inspecting the parsed assignment.
       if (char === ';' && depth === 0) {
-        // Only strip the trailing ; (assignment terminator).
-        // Do NOT strip } — it belongs to attrset/function-call syntax
-        // (e.g. "import ./nix/packages.nix { inherit pkgs; }") and must be
-        // preserved for callers inspecting the parsed assignment body.
-        record(currentBody, pos);
-        currentName = '';
-        currentBody = '';
+        record(pos);
+        nameStart = -1;
+        nameEnd = -1;
+        rhsStart = -1;
         depth = 0;
         inAssignment = false;
       }
@@ -403,28 +416,42 @@ function parseWithRecAssignments(content: string): WithRecAssignment[] {
   }
 
   // Handle last assignment without trailing semicolon check
-  if (currentName.trim() && currentBody.trim()) {
-    record(currentBody, pos);
+  if (nameStart !== -1 && rhsStart !== -1 && body.slice(rhsStart, pos).trim()) {
+    record(pos);
   }
 
   return assignments;
 }
 
 function parseFinalInheritIds(content: string): string[] {
-  // Find the final { inherit ... ; } block — it's after the "with rec { ... };" block
-  const withRecMatch = content.match(/with\s+rec\s*\{/);
-  if (!withRecMatch) return [];
+  const inherit = findFinalInherit(content);
+  return inherit ? inherit.ids : [];
+}
 
-  const braceStart = withRecMatch.index! + withRecMatch[0].length;
-  const closingIdx = findMatchingBrace(content, braceStart);
-  if (closingIdx === -1) return [];
+/**
+ * The final `{ inherit ...; }` attrset after the `with rec { ... };` block, with the
+ * offset of its terminating `;` so identifiers can be spliced into it.
+ */
+function findFinalInherit(
+  content: string,
+): { ids: string[]; idsText: string; semicolon: number } | null {
+  const code = maskNixTrivia(content);
+  const block = findWithRecBody(content, code);
+  if (!block) return null;
 
   // After the with rec block's closing }, find { inherit ... ; }
-  const afterRec = content.slice(closingIdx);
-  const inheritMatch = afterRec.match(/\{\s*inherit\s+([^;]+);\s*\}/);
-  if (!inheritMatch) return [];
+  const afterRec = code.slice(block.closingIdx);
+  const match = afterRec.match(/\{\s*inherit\s+([^;]+);\s*\}/);
+  if (!match) return null;
 
-  return inheritMatch[1].trim().split(/\s+/);
+  const idsText = match[1];
+  return {
+    // Identifiers are read from the masked copy so a commented-out name in an
+    // exploded inherit list is not mistaken for one the flake exposes.
+    ids: idsText.trim().split(/\s+/).filter(Boolean),
+    idsText,
+    semicolon: block.closingIdx + match.index! + match[0].indexOf(';'),
+  };
 }
 
 function extractInheritIds(assignmentBody: string): string[] {
@@ -473,16 +500,22 @@ interface BracedRegion {
   close: number;
 }
 
+/**
+ * `scan` is the text the pattern and the brace matcher run against; it defaults to
+ * `content` but callers that must not be fooled by braces inside comments or string
+ * literals pass the trivia-masked copy. Offsets are identical either way.
+ */
 function findBracedRegion(
   content: string,
   pattern: RegExp,
+  scan: string = content,
 ): BracedRegion | null {
-  const match = content.match(pattern);
+  const match = scan.match(pattern);
   if (!match) return null;
 
   const relativeOpen = match[0].lastIndexOf('{');
   const open = match.index! + relativeOpen;
-  const close = findMatchingBrace(content, open + 1);
+  const close = findMatchingBrace(scan, open + 1);
   return close === -1 ? null : { open, close };
 }
 
@@ -737,36 +770,31 @@ function insertMissingPackageInherits(
 ): string {
   if (mergedIds.length === 0) return content;
 
-  const withRecRegion = findBracedRegion(content, /with\s+rec\s*\{/);
+  const code = maskNixTrivia(content);
+  const withRecRegion = findBracedRegion(content, /with\s+rec\s*\{/, code);
   if (!withRecRegion)
     throw new Error('Cannot merge flake.nix: with rec block was not found');
 
-  const withRecBody = content.slice(
-    withRecRegion.open + 1,
-    withRecRegion.close,
-  );
+  const withRecBody = code.slice(withRecRegion.open + 1, withRecRegion.close);
   const packagesMatch = withRecBody.match(/\bpackages\s*=\s*import\b/);
   if (!packagesMatch) return content;
 
   const packagesStart = withRecRegion.open + 1 + packagesMatch.index!;
-  const argsOpen = content.indexOf(
-    '{',
-    packagesStart + packagesMatch[0].length,
-  );
+  const argsOpen = code.indexOf('{', packagesStart + packagesMatch[0].length);
   if (argsOpen === -1 || argsOpen >= withRecRegion.close) {
     throw new Error(
       'Cannot merge flake.nix: packages import argument set was not found',
     );
   }
 
-  const argsClose = findMatchingBrace(content, argsOpen + 1);
+  const argsClose = findMatchingBrace(code, argsOpen + 1);
   if (argsClose === -1 || argsClose > withRecRegion.close) {
     throw new Error(
       'Cannot merge flake.nix: packages import argument set is unbalanced',
     );
   }
 
-  const argsBody = content.slice(argsOpen + 1, argsClose);
+  const argsBody = code.slice(argsOpen + 1, argsClose);
   const inheritMatch = argsBody.match(/\binherit\b([\s\S]*?);/);
   if (!inheritMatch) return content;
 
@@ -867,15 +895,16 @@ function insertMissingWithRecAssignments(
   );
   if (missing.length === 0) return content;
 
-  const region = findBracedRegion(content, /with\s+rec\s*\{/);
+  const code = maskNixTrivia(content);
+  const region = findBracedRegion(content, /with\s+rec\s*\{/, code);
   if (!region)
     throw new Error(
       `Cannot merge flake.nix: with rec block was not found, so ` +
         `${quoteNames(missing.map((assignment) => assignment.name))} could not be spliced`,
     );
 
-  const body = content.slice(region.open + 1, region.close);
-  const entryIndent = body.match(/^([ \t]*)[\w'-]+\s*=/m)?.[1] ?? '          ';
+  const scan = code.slice(region.open + 1, region.close);
+  const entryIndent = scan.match(/^([ \t]*)[\w'-]+\s*=/m)?.[1] ?? '          ';
   const block = missing
     .map((assignment) => renderWithRecAssignment(assignment, entryIndent))
     .join('\n');
@@ -883,44 +912,32 @@ function insertMissingWithRecAssignments(
   return insertBeforeClosingBrace(content, region.close, block);
 }
 
-function findFinalInheritSemicolon(
-  content: string,
-): { semicolon: number; text: string } | null {
-  const region = findBracedRegion(content, /with\s+rec\s*\{/);
-  if (!region) return null;
-
-  const afterRec = content.slice(region.close);
-  const match = afterRec.match(/\{\s*inherit\s+([^;]+);\s*\}/);
-  if (!match) return null;
-
-  return {
-    semicolon: region.close + match.index! + match[0].indexOf(';'),
-    text: match[1],
-  };
-}
-
 /** Splice the identifiers a lower layer exposes from the flake into the base's final attrset. */
 function insertMissingFinalInherits(
   content: string,
   mergedIds: string[],
 ): string {
-  const baseIds = new Set(parseFinalInheritIds(content));
+  const target = findFinalInherit(content);
+  const baseIds = new Set(target?.ids ?? []);
   const missing = mergedIds.filter((id) => !baseIds.has(id)).sort();
   if (missing.length === 0) return content;
 
-  const target = findFinalInheritSemicolon(content);
   if (!target)
     throw new Error(
       `Cannot merge flake.nix: the final inherit attribute set was not found, so ` +
         `${quoteNames(missing)} could not be spliced`,
     );
 
-  return spliceInheritIds(content, target.semicolon, target.text, missing);
+  return spliceInheritIds(content, target.semicolon, target.idsText, missing);
 }
 
-/** The last top-level `{ ... }` inside `[start, end)` — an assignment's argument set. */
+/**
+ * The last top-level `{ ... }` inside `[start, end)` — an assignment's argument set.
+ * `scan` must be trivia-masked: a brace inside a `''…''` shell fragment is text, not
+ * structure.
+ */
 function findTrailingBracedRegion(
-  content: string,
+  scan: string,
   start: number,
   end: number,
 ): BracedRegion | null {
@@ -929,10 +946,10 @@ function findTrailingBracedRegion(
   let region: BracedRegion | null = null;
 
   for (let index = start; index < end; index++) {
-    if (content[index] === '{') {
+    if (scan[index] === '{') {
       if (depth === 0) open = index;
       depth++;
-    } else if (content[index] === '}') {
+    } else if (scan[index] === '}') {
       depth--;
       if (depth === 0 && open !== -1) region = { open, close: index };
       if (depth < 0) break;
@@ -950,13 +967,19 @@ interface ArgEntry {
   indent: string;
 }
 
-function classifyArgEntry(segment: string): ArgEntry | null {
+/**
+ * `segment` is the entry's original source and becomes `text`; `scan` is the same
+ * span with comments and string literals blanked and is what the shape is read from,
+ * so an `inherit` or a name that only appears inside trivia is not taken for one.
+ */
+function classifyArgEntry(segment: string, scan: string): ArgEntry | null {
   const trimmed = segment.trim();
-  if (!trimmed) return null;
+  const shape = scan.trim();
+  if (!trimmed || !shape) return null;
 
   const offset = segment.length - segment.trimStart().length;
   const indent = lineIndentAt(segment, offset);
-  const inherit = trimmed.match(/^inherit\b([\s\S]*);$/);
+  const inherit = shape.match(/^inherit\b([\s\S]*);$/);
   if (inherit) {
     // `inherit (foo) a b;` takes its names from foo — the parenthesised source is
     // not itself an inherited identifier.
@@ -966,24 +989,37 @@ function classifyArgEntry(segment: string): ArgEntry | null {
     return names ? { kind: 'inherit', names, text: trimmed, indent } : null;
   }
 
-  const binding = trimmed.match(/^([a-zA-Z_][\w'-]*)\s*=/);
+  const binding = shape.match(/^([a-zA-Z_][\w'-]*)\s*=/);
   return binding
     ? { kind: 'binding', names: [binding[1]], text: trimmed, indent }
     : null;
 }
 
-function parseArgEntries(content: string, region: BracedRegion): ArgEntry[] {
+/**
+ * Split an argument set into its entries. Delimiters are counted on the trivia-masked
+ * copy: a `;` inside a `shellHook = '' … ''` fragment or a comment is text, and
+ * splitting on it would store — and later splice — a truncated, unparseable entry.
+ */
+function parseArgEntries(
+  content: string,
+  code: string,
+  region: BracedRegion,
+): ArgEntry[] {
   const body = content.slice(region.open + 1, region.close);
+  const scan = code.slice(region.open + 1, region.close);
   const entries: ArgEntry[] = [];
   let depth = 0;
   let start = 0;
 
-  for (let index = 0; index < body.length; index++) {
-    const char = body[index];
+  for (let index = 0; index < scan.length; index++) {
+    const char = scan[index];
     if (char === '{' || char === '[' || char === '(') depth++;
     else if (char === '}' || char === ']' || char === ')') depth--;
     else if (char === ';' && depth === 0) {
-      const entry = classifyArgEntry(body.slice(start, index + 1));
+      const entry = classifyArgEntry(
+        body.slice(start, index + 1),
+        scan.slice(start, index + 1),
+      );
       if (entry) entries.push(entry);
       start = index + 1;
     }
@@ -1002,14 +1038,15 @@ function insertArgEntry(
   );
   if (!target) return content;
 
-  const region = findTrailingBracedRegion(content, target.start, target.end);
+  const code = maskNixTrivia(content);
+  const region = findTrailingBracedRegion(code, target.start, target.end);
   if (!region) return content;
 
-  const body = content.slice(region.open + 1, region.close);
-  const entryIndent = body.match(/^([ \t]*)\S/m)?.[1] ?? '';
+  const scan = code.slice(region.open + 1, region.close);
+  const entryIndent = scan.match(/^([ \t]*)\S/m)?.[1] ?? '';
 
   if (entry.kind === 'inherit') {
-    const inheritMatch = body.match(/\binherit\b([\s\S]*?);/);
+    const inheritMatch = scan.match(/\binherit\b([\s\S]*?);/);
     if (!inheritMatch)
       return insertBeforeClosingBrace(
         content,
@@ -1059,14 +1096,15 @@ function rescueLostArgEntries(
   >();
   for (const [index, flake] of parsed.entries()) {
     const source = sources[index];
+    const code = maskNixTrivia(source);
     for (const assignment of flake.withRecAssignments) {
       const region = findTrailingBracedRegion(
-        source,
+        code,
         assignment.start,
         assignment.end,
       );
       if (!region) continue;
-      for (const entry of parseArgEntries(source, region)) {
+      for (const entry of parseArgEntries(source, code, region)) {
         for (const name of entry.names) {
           candidates.set(name, { assignmentName: assignment.name, entry });
         }

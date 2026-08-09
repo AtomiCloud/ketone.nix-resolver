@@ -428,6 +428,102 @@ describe('mergeFlake outputs binding and comment preservation', () => {
     expect(output).toBe(higher);
   });
 
+  test('keeps splice offsets anchored on a CRLF source', () => {
+    const lower = `{
+  inputs = { nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable"; };
+  outputs =
+    { self, nixpkgs }:
+    (
+      system:
+      let
+        pkgs = nixpkgs.legacyPackages.\${system};
+      in
+      with rec {
+        packages = import ./nix/packages.nix {
+          inherit pkgs;
+        };
+        formatter = import ./nix/fmt.nix {
+          inherit pkgs;
+        };
+      };
+      {
+        inherit packages formatter;
+      }
+    );
+}
+`.replace(/\n/g, '\r\n');
+    const higher = lower
+      .replace(
+        '        formatter = import ./nix/fmt.nix {\r\n          inherit pkgs;\r\n        };\r\n',
+        '',
+      )
+      .replace(' formatter;', ';');
+
+    // The carriage return of the preceding line must not be taken for the start of
+    // the name: `indent`, `raw`, `leadingComments`, `start` and `end` all hang off it.
+    const packages = parseFlake(lower).withRecAssignments.find(
+      (assignment) => assignment.name === 'packages',
+    );
+    expect(packages?.indent).toBe('        ');
+    expect(packages?.raw.startsWith('packages = import')).toBe(true);
+
+    const output = mergeFlake([
+      { content: lower, layer: 0, template: 'lower' },
+      { content: higher, layer: 1, template: 'higher' },
+    ]);
+
+    expect(output).toContain('        formatter = import ./nix/fmt.nix {');
+    expect(output).not.toMatch(/\n {16}formatter/);
+    expect(output).toContain('inherit packages formatter;');
+  });
+
+  test('does not split an argument set on a semicolon inside a string', () => {
+    const lower = `{
+  inputs = { nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable"; };
+  outputs =
+    { self, nixpkgs }:
+    (
+      system:
+      let
+        pkgs = nixpkgs.legacyPackages.\${system};
+      in
+      with rec {
+        packages = import ./nix/packages.nix {
+          inherit pkgs;
+        };
+        devShells = import ./nix/shells.nix {
+          inherit pkgs packages;
+          shellHook = ''
+            export A=1; export B=2
+          '';
+        };
+      };
+      {
+        inherit packages devShells;
+      }
+    );
+}
+`;
+    const higher = lower.replace(
+      "          shellHook = ''\n            export A=1; export B=2\n          '';\n",
+      '',
+    );
+
+    const output = mergeFlake([
+      { content: lower, layer: 0, template: 'lower' },
+      { content: higher, layer: 1, template: 'higher' },
+    ]);
+
+    // The rescued shellHook must arrive whole. Splitting on the `;` inside the
+    // indented string stores a truncated entry and splices unparseable Nix.
+    expectParseableNix(output);
+    expect(output).toContain(
+      "          shellHook = ''\n" +
+        '            export A=1; export B=2\n' +
+        "          '';",
+    );
+  });
+
   test('refuses when the base has no with rec block to splice into', () => {
     const lower = `{
   inputs = { nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable"; };
