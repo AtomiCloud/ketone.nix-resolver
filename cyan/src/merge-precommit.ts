@@ -217,8 +217,13 @@ function commentLines(gap: string): string[] {
   const trimmed = gap.trim();
   if (trimmed === '') return [];
   const offset = gap.length - gap.trimStart().length;
-  const startColumn = offset - (gap.lastIndexOf('\n', offset - 1) + 1);
-  return trimmed.split('\n').map((line, index) => {
+  const lines = trimmed.split('\n');
+  // A gap that opens with a same-line trailing comment has no column of its own; later lines
+  // sit at the indent the author gave the comment block that follows.
+  const startColumn = gap.slice(0, offset).includes('\n')
+    ? offset - (gap.lastIndexOf('\n', offset - 1) + 1)
+    : Math.min(Infinity, ...lines.slice(1).filter((l) => l.trim() !== '').map((l) => l.match(/^[ \t]*/)![0].length));
+  return lines.map((line, index) => {
     if (index === 0) return line.trimEnd();
     if (line.trim() === '') return '';
     return line.slice(Math.min(startColumn, line.match(/^[ \t]*/)![0].length)).trimEnd();

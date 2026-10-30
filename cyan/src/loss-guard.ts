@@ -217,7 +217,7 @@ export function findFunctionHeader(source: string): FunctionHeader | null {
     const from = bodyStart + start + leading;
     const end = bodyStart + start + commentFree.slice(bodyStart + start, bodyStart + start + maskedPart.length).trimEnd().length;
     if (!argSources.has(name)) args.push(name);
-    argSources.set(name, source.slice(from, end));
+    argSources.set(name, commentFree.slice(from, end));
   }
 
   return {

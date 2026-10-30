@@ -414,6 +414,42 @@ pre-commit-lib.run {
     expectParseableNix(output);
   });
 
+  test('a # comment inside one head argument is dropped, not joined into its default', () => {
+    const input = pcHead(`{
+  pre-commit-lib,
+  sep ? # the separator
+    "x",
+}:
+`);
+    const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+    expect(output).toContain('sep ? "x"');
+    expectNixfmtClean(output);
+  });
+
+  test('comment lines after a same-line trailing comment keep their relative indent', () => {
+    const body = (lets: string) => `${stdHead}let
+${lets}
+in
+pre-commit-lib.run {
+  src = ./.;
+
+  hooks = {
+    a.enable = true;
+  };
+}
+`;
+    const between = body(`  a = 1; # about a
+  # about b
+  b = 2;`);
+    const beforeIn = body(`  x = 1; # sl
+  # end of let`);
+    for (const input of [between, beforeIn]) {
+      const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+      expect(output).not.toMatch(/^ {3}#/m);
+      expectNixfmtClean(output);
+    }
+  });
+
   test('#7 same-layer ties order by code unit, not by locale', async () => {
     const { resolver } = await import('../index.ts');
     const file = (template: string, content: string) => ({
