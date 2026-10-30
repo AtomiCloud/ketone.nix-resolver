@@ -1,5 +1,8 @@
 // merge-precommit.ts — Parser, merger, and pretty-printer for pre-commit.nix files
 
+import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
+import { collapseArgWhitespace, compareCodeUnits, orderedUnion, printFunctionHead } from './nix-print.ts';
+
 interface HookConfig {
   enable: boolean;
   name?: string;
@@ -15,9 +18,32 @@ interface HookConfig {
   [key: string]: boolean | string | string[] | undefined;
 }
 
+/** One `let` binding: the exact statement text plus the comment block directly above it. */
+interface LetBinding {
+  comment: string[];
+  text: string;
+  /** Column the statement started at in its source file. */
+  indent: number;
+}
+
+/** The part between the function head and `pre-commit-lib.run`: an optional `let ... in` and whatever follows it. */
+interface ParsedPrelude {
+  hasLet: boolean;
+  /** Comment lines above `let`. */
+  leadingComment: string[];
+  /** Binding name → binding, in source order. */
+  bindings: Map<string, LetBinding>;
+  /** Comment lines after the last binding, before `in`. */
+  trailingComment: string[];
+  /** Everything after `in` (or the whole prelude when there is no `let`), e.g. `with x;`. */
+  rest: string;
+}
+
 interface ParsedPrecommit {
-  functionArgs: string;
-  prelude: string;
+  argNames: string[];
+  argSources: Map<string, string>;
+  hasEllipsis: boolean;
+  prelude: ParsedPrelude;
   src: string;
   hooks: Map<string, HookConfig>;
   hasRec: Map<string, boolean>; // tracks which hooks use `rec`
@@ -83,24 +109,17 @@ function needsQuotes(key: string, value: string): boolean {
 // ─── Parse ───────────────────────────────────────────────────────────────────
 
 function parsePrecommit(content: string): ParsedPrecommit {
-  // The function header in diene's files is normally multi-line.  Parsing it from
-  // the complete source avoids turning a valid header into the bare `:` output.
-  const headerStart = content.search(/\S/);
-  if (headerStart === -1 || content[headerStart] !== '{') {
+  // The function header in diene's files is normally multi-line, so it is parsed
+  // structurally rather than line by line.
+  const header = findFunctionHeader(content);
+  if (!header) {
     throw new Error('pre-commit.nix function header not found');
   }
-  const headerEnd = findMatchingBrace(content, headerStart);
-  if (headerEnd === -1 || content.slice(headerEnd + 1).match(/^\s*:/) === null) {
-    throw new Error('pre-commit.nix function header not found');
-  }
+  const bodyStart = header.colonIndex + 1;
 
-  const colonOffset = content.slice(headerEnd + 1).search(/:/);
-  const bodyStart = headerEnd + 1 + colonOffset + 1;
-  const functionArgs = content.slice(headerStart, headerEnd + 1).trim();
-
-  // Preserve the highest layer's let/in prelude.  Hook configuration may refer to
-  // bindings declared there, so dropping it makes a syntactically invalid or
-  // unevaluable output even when the hook merge itself is correct.
+  // The `let` prelude is parsed into named bindings so layers can be unioned: hook
+  // configuration may refer to bindings declared there, so dropping one makes a
+  // syntactically valid but unevaluable output even when the hook merge is correct.
   const body = content.slice(bodyStart);
   const runMatch = /\bpre-commit-lib\.run\s*\{/.exec(body);
   if (!runMatch || runMatch.index === undefined) {
@@ -112,7 +131,7 @@ function parsePrecommit(content: string): ParsedPrecommit {
   if (runBlockEnd === -1) {
     throw new Error('pre-commit.nix pre-commit-lib.run block is not closed');
   }
-  const prelude = content.slice(bodyStart, runBlockStart).trim();
+  const prelude = parsePrelude(content.slice(bodyStart, runBlockStart));
   const runBlockContent = content.slice(runBlockStart, runBlockEnd + 1);
 
   // 3. Extract src value
@@ -126,7 +145,156 @@ function parsePrecommit(content: string): ParsedPrecommit {
   const hooks = parseHooks(runBlockContent);
   const hasRec = detectRecHooks(runBlockContent);
 
-  return { functionArgs, prelude, src, hooks, hasRec };
+  return {
+    argNames: header.args,
+    argSources: header.argSources,
+    hasEllipsis: header.hasEllipsis,
+    prelude,
+    src,
+    hooks,
+    hasRec,
+  };
+}
+
+const KEYWORD = /(?<![\w'.-])(let|in)(?![\w'-])/g;
+
+function parsePrelude(raw: string): ParsedPrelude {
+  const text = raw.trim();
+  const empty = { hasLet: false, leadingComment: [], bindings: new Map<string, LetBinding>(), trailingComment: [], rest: text };
+  if (text === '') return empty;
+
+  const code = maskNixTrivia(text);
+  const keywords = [...code.matchAll(KEYWORD)].map((m) => ({ word: m[1], index: m.index! }));
+  if (keywords.length === 0 || keywords[0].word !== 'let' || code.slice(0, keywords[0].index).trim() !== '') return empty;
+  const letIndex = keywords[0].index;
+
+  let depth = 0;
+  let inIndex = -1;
+  for (const k of keywords) {
+    depth += k.word === 'let' ? 1 : -1;
+    if (depth === 0) {
+      inIndex = k.index;
+      break;
+    }
+  }
+  if (inIndex === -1) throw new Error('pre-commit.nix let prelude has no matching `in`');
+
+  const bodyStart = letIndex + 'let'.length;
+  const bindings = new Map<string, LetBinding>();
+  const nested = new Map(keywords.map((k) => [k.index, k.word]));
+  let cursor = bodyStart;
+  let bracket = 0;
+  let letDepth = 0;
+  let pendingPreludes = 0;
+  let statementStart = bodyStart;
+  for (let i = bodyStart; i < inIndex; i++) {
+    const word = nested.get(i);
+    if (word === 'let') letDepth++;
+    else if (word === 'in') letDepth--;
+    const ch = code[i];
+    // A `with x;` / `assert x;` prelude inside a binding value owns the next top-level `;`.
+    if (bracket === 0 && letDepth === 0 && !/[\w'.-]/.test(code[i - 1] ?? '') && /^(?:with|assert)(?![\w'-])/.test(code.slice(i, i + 7))) {
+      pendingPreludes++;
+      i += code.startsWith('with', i) ? 3 : 5;
+      continue;
+    }
+    if (ch === '{' || ch === '[' || ch === '(') bracket++;
+    else if (ch === '}' || ch === ']' || ch === ')') bracket--;
+    else if (ch === ';' && bracket === 0 && letDepth === 0) {
+      if (pendingPreludes > 0) {
+        pendingPreludes--;
+        continue;
+      }
+      addLetStatement(text, code, statementStart, i + 1, bindings);
+      statementStart = i + 1;
+      cursor = i + 1;
+    }
+  }
+  const trailing = text.slice(cursor, inIndex);
+  if (maskNixTrivia(trailing).trim() !== '') {
+    throw new Error('pre-commit.nix let prelude has a binding that is not terminated by a `;`');
+  }
+  return {
+    hasLet: true,
+    leadingComment: commentLines(text.slice(0, letIndex)),
+    bindings,
+    trailingComment: commentLines(trailing),
+    rest: text.slice(inIndex + 'in'.length).trim(),
+  };
+}
+
+/** The comment text in `gap` (only whitespace and comments), whole and re-based to column 0. */
+function commentLines(gap: string): string[] {
+  const trimmed = gap.trim();
+  if (trimmed === '') return [];
+  const offset = gap.length - gap.trimStart().length;
+  const lines = trimmed.split('\n');
+  // A gap that opens with a same-line trailing comment has no column of its own; later lines
+  // sit at the indent the author gave the comment block that follows.
+  const startColumn = gap.slice(0, offset).includes('\n')
+    ? offset - (gap.lastIndexOf('\n', offset - 1) + 1)
+    : Math.min(Infinity, ...lines.slice(1).filter((l) => l.trim() !== '').map((l) => l.match(/^[ \t]*/)![0].length));
+  return lines.map((line, index) => {
+    if (index === 0) return line.trimEnd();
+    if (line.trim() === '') return '';
+    return line.slice(Math.min(startColumn, line.match(/^[ \t]*/)![0].length)).trimEnd();
+  });
+}
+
+function addLetStatement(text: string, code: string, start: number, end: number, out: Map<string, LetBinding>): void {
+  // Split the gap above the statement into its comment block and the statement itself.
+  const maskedStatement = code.slice(start, end);
+  const lead = maskedStatement.length - maskedStatement.trimStart().length;
+  const gap = text.slice(start, start + lead);
+  const bodyFrom = start + lead;
+  const statement = text.slice(bodyFrom, end);
+  const maskedBody = code.slice(bodyFrom, end);
+  const comment = commentLines(gap);
+  const indent = gap.length - (gap.lastIndexOf('\n') + 1);
+
+  const inherit = maskedBody.match(/^inherit\b([\s\S]*);$/);
+  if (inherit) {
+    let rest = inherit[1].trim();
+    let source = '';
+    if (rest.startsWith('(')) {
+      let depth = 0;
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === '(') depth++;
+        if (rest[i] === ')' && --depth === 0) {
+          source = rest.slice(0, i + 1) + ' ';
+          rest = rest.slice(i + 1);
+          break;
+        }
+      }
+    }
+    // The statement text is re-read from the source so a source expression keeps its bytes.
+    const names = rest.match(/[a-zA-Z_][\w'-]*/g) ?? [];
+    const sourceText = source ? statement.slice(statement.indexOf('('), statement.indexOf('(') + source.trimEnd().length) + ' ' : '';
+    names.forEach((name, index) => {
+      out.set(name, { comment: index === 0 ? comment : [], text: `inherit ${sourceText}${name};`, indent });
+    });
+    return;
+  }
+
+  const assignment = maskedBody.match(/^([a-zA-Z_][\w'-]*(?:\s*\.\s*[a-zA-Z_][\w'-]*)*)\s*=/);
+  if (!assignment) {
+    throw new Error(`pre-commit.nix let prelude has a binding this merger does not model: "${statement.split('\n')[0].trim()}"`);
+  }
+  out.set(assignment[1].replace(/\s+/g, ''), { comment, text: statement, indent });
+}
+
+function printLetBinding(binding: LetBinding): string[] {
+  const lines = binding.comment.map((c) => (c ? `  ${c}` : ''));
+  // Continuation lines move by the same amount the statement's first line did, so a
+  // binding written at another indent still lands at the two-space let indent.
+  const shift = 2 - binding.indent;
+  binding.text.split('\n').forEach((line, index) => {
+    if (index === 0) lines.push(`  ${line}`);
+    else if (line.trim() === '' || shift === 0) lines.push(line.trim() === '' ? '' : line);
+    else if (shift > 0) lines.push(' '.repeat(shift) + line);
+    else lines.push(line.slice(Math.min(-shift, line.match(/^\s*/)![0].length)));
+  });
+  return lines;
 }
 
 function detectRecHooks(blockContent: string): Map<string, boolean> {
@@ -140,6 +308,22 @@ function detectRecHooks(blockContent: string): Map<string, boolean> {
   }
 
   return hasRec;
+}
+
+/** Net open `[`, `(` and `{` in `text`, ignoring brackets inside strings and comments. */
+function bracketDepth(text: string): number {
+  const code = maskNixTrivia(text);
+  let depth = 0;
+  for (const char of code) {
+    if (char === '[' || char === '(' || char === '{') depth++;
+    else if (char === ']' || char === ')' || char === '}') depth--;
+  }
+  return depth;
+}
+
+/** True once `text` has closed every bracket and ends at a `;` — the end of a binding. */
+function statementComplete(text: string): boolean {
+  return bracketDepth(text) <= 0 && maskNixTrivia(text).trimEnd().endsWith(';');
 }
 
 function parseHooks(blockContent: string): Map<string, HookConfig> {
@@ -178,7 +362,8 @@ function parseHooks(blockContent: string): Map<string, HookConfig> {
   let inArrayField: string | null = null;
   let arrayContent: string[] = [];
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     const trimmed = line.trim();
 
     // Skip empty lines
@@ -348,6 +533,24 @@ function parseHooks(blockContent: string): Map<string, HookConfig> {
         continue;
       }
 
+      // A value that spans lines (`entry = validators [ ... ];`, `args = [ ... ] ++ extra;`, an indented string):
+      // keep the whole statement verbatim, re-indented relative to its key. The single-line
+      // passthrough below would keep only the first line and emit broken Nix.
+      const openField = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*=\s*(\S[\s\S]*)$/);
+      if (openField && !statementComplete(trimmed)) {
+        const keyIndent = line.length - line.trimStart().length;
+        const statement = [trimmed];
+        while (lineIndex + 1 < lines.length && !statementComplete(statement.join('\n'))) {
+          lineIndex++;
+          const next = lines[lineIndex];
+          const nextIndent = next.length - next.trimStart().length;
+          statement.push(next.trim() ? next.slice(Math.min(keyIndent, nextIndent)) : '');
+        }
+        const value = statement.join('\n').replace(/^[a-zA-Z_][a-zA-Z0-9_-]*\s*=\s*/, '').replace(/\s*;\s*$/, '');
+        (currentConfig as Record<string, unknown>)[`__raw__${openField[1]}`] = value;
+        continue;
+      }
+
       // passthrough fields (any other key = value;)
       const passthroughMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*=\s*([^;]+)\s*;?\s*$/);
       if (passthroughMatch) {
@@ -383,31 +586,15 @@ export function mergePrecommit(
 ): string {
   const parsed = sortedFiles.map((f) => parsePrecommit(f.content));
 
-  // Function args: normalize by sorting before comparing
-  function normalizeFunctionArgs(args: string): string {
-    const match = args.match(/^\{([^}]+)\}$/);
-    if (!match) return args;
-    const argList = match[1].split(',').map((a) => a.trim()).filter(Boolean);
-    // Keep "..." at the end if present
-    const restIdx = argList.indexOf('...');
-    let sorted: string[];
-    if (restIdx !== -1) {
-      const rest = argList.splice(restIdx, 1);
-      sorted = [...argList.sort(), ...rest];
-    } else {
-      sorted = argList.sort();
-    }
-    return `{ ${sorted.join(', ')} }`;
-  }
-  const firstArgs = normalizeFunctionArgs(parsed[0].functionArgs);
+  // Function args: union, keeping the highest layer's order and appending args only a
+  // lower layer has (as mergePackages does). Whole argument texts are kept, highest
+  // layer wins, so a `?` default survives.
+  const argSources = new Map<string, string>();
   for (const p of parsed) {
-    const otherArgs = normalizeFunctionArgs(p.functionArgs);
-    if (otherArgs !== firstArgs) {
-      throw new Error(
-        `pre-commit.nix function args mismatch: "${otherArgs}" vs "${firstArgs}"`,
-      );
-    }
+    for (const name of p.argNames) argSources.set(name, collapseArgWhitespace(p.argSources.get(name) ?? name));
   }
+  const functionArgs = orderedUnion(parsed.map((p) => p.argNames)).map((name) => argSources.get(name) ?? name);
+  const hasEllipsis = parsed.some((p) => p.hasEllipsis);
 
   // src: highest layer wins
   const src = parsed[parsed.length - 1].src;
@@ -429,12 +616,30 @@ export function mergePrecommit(
       }
 
       // String fields: highest layer wins (LWW)
-      if (config.name !== undefined) existing.name = config.name;
-      if (config.description !== undefined) existing.description = config.description;
-      if (config.entry !== undefined) existing.entry = config.entry;
-      if (config.files !== undefined) existing.files = config.files;
-      if (config.language !== undefined) existing.language = config.language;
-      if (config.package !== undefined) existing.package = config.package;
+      if (config.name !== undefined) {
+        existing.name = config.name;
+        delete (existing as Record<string, unknown>).__raw__name;
+      }
+      if (config.description !== undefined) {
+        existing.description = config.description;
+        delete (existing as Record<string, unknown>).__raw__description;
+      }
+      if (config.entry !== undefined) {
+        existing.entry = config.entry;
+        delete (existing as Record<string, unknown>).__raw__entry;
+      }
+      if (config.files !== undefined) {
+        existing.files = config.files;
+        delete (existing as Record<string, unknown>).__raw__files;
+      }
+      if (config.language !== undefined) {
+        existing.language = config.language;
+        delete (existing as Record<string, unknown>).__raw__language;
+      }
+      if (config.package !== undefined) {
+        existing.package = config.package;
+        delete (existing as Record<string, unknown>).__raw__package;
+      }
 
       // Boolean fields: highest layer wins
       if (config.pass_filenames !== undefined) existing.pass_filenames = config.pass_filenames;
@@ -484,27 +689,55 @@ export function mergePrecommit(
     if (config.stages) config.stages.sort();
   }
 
-  const prelude = parsed[parsed.length - 1].prelude;
-  return prettyPrint(firstArgs, prelude, src, mergedHooks, mergedRec);
+  return prettyPrint(functionArgs, hasEllipsis, mergePreludes(parsed.map((p) => p.prelude)), src, mergedHooks, mergedRec);
+}
+
+/** `let` bindings are unioned with per-name last-writer-wins; a binding only a lower layer has is kept. */
+function mergePreludes(preludes: ParsedPrelude[]): ParsedPrelude {
+  const highest = preludes[preludes.length - 1];
+  const order = orderedUnion(preludes.map((p) => [...p.bindings.keys()]));
+  const bindings = new Map<string, LetBinding>();
+  for (const name of order) {
+    for (let i = preludes.length - 1; i >= 0; i--) {
+      const binding = preludes[i].bindings.get(name);
+      if (binding) {
+        bindings.set(name, binding);
+        break;
+      }
+    }
+  }
+  return {
+    hasLet: preludes.some((p) => p.hasLet),
+    leadingComment: highest.leadingComment,
+    bindings,
+    trailingComment: highest.trailingComment,
+    rest: highest.rest,
+  };
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
 
 function prettyPrint(
-  functionArgs: string,
-  prelude: string,
+  functionArgs: string[],
+  hasEllipsis: boolean,
+  prelude: ParsedPrelude,
   src: string,
   hooks: Map<string, HookConfig>,
   hasRec: Map<string, boolean>,
 ): string {
   const lines: string[] = [];
 
-  // Function args (sort alphabetically)
-  const sortedArgs = sortFunctionArgs(functionArgs);
-  lines.push(`${sortedArgs}:`);
+  lines.push(...printFunctionHead(functionArgs, hasEllipsis));
 
-  if (prelude) {
-    lines.push(prelude);
+  if (prelude.hasLet) {
+    for (const comment of prelude.leadingComment) lines.push(comment);
+    lines.push('let');
+    for (const binding of prelude.bindings.values()) lines.push(...printLetBinding(binding));
+    for (const comment of prelude.trailingComment) lines.push(comment ? `  ${comment}` : '');
+    lines.push('in');
+  }
+  if (prelude.rest) {
+    lines.push(prelude.rest);
   }
 
   // pre-commit-lib.run { ... }
@@ -514,7 +747,7 @@ function prettyPrint(
   lines.push('  hooks = {');
 
   // Sort hooks alphabetically
-  const sortedHookNames = [...hooks.keys()].sort();
+  const sortedHookNames = [...hooks.keys()].sort(compareCodeUnits);
 
   for (let i = 0; i < sortedHookNames.length; i++) {
     const name = sortedHookNames[i];
@@ -544,9 +777,20 @@ function prettyPrint(
       const fieldOrder = ['description', 'entry', 'excludes', 'files', 'language', 'name', 'package', 'pass_filenames', 'stages'];
       const emittedKeys = new Set<string>(['enable']);
 
+      const pushRaw = (key: string, value: string): void => {
+        const [first, ...rest] = value.split('\n');
+        lines.push(`      ${key} = ${first}`);
+        for (const extra of rest) lines.push(extra ? `      ${extra}` : '');
+        lines[lines.length - 1] += ';';
+      };
+
       for (const key of fieldOrder) {
         emittedKeys.add(key);
-        if (key === 'excludes' && config.excludes) {
+        const raw = config[`__raw__${key}`];
+        if (typeof raw === 'string') {
+          emittedKeys.add(`__raw__${key}`);
+          pushRaw(key, raw);
+        } else if (key === 'excludes' && config.excludes) {
           lines.push(`      excludes = [`);
           for (const ex of config.excludes) {
             lines.push(`        "${ex}"`);
@@ -591,12 +835,9 @@ function prettyPrint(
       }
       // Emit raw Nix passthrough fields (stored with __raw__ prefix)
       for (const key of Object.keys(config).sort()) {
-        if (!key.startsWith('__raw__')) continue;
+        if (!key.startsWith('__raw__') || emittedKeys.has(key)) continue;
         const value = config[key];
-        if (typeof value === 'string') {
-          const realKey = key.slice(7); // strip "__raw__" prefix
-          lines.push(`      ${realKey} = ${value};`);
-        }
+        if (typeof value === 'string') pushRaw(key.slice(7), value);
       }
 
       lines.push('    };');
@@ -608,25 +849,4 @@ function prettyPrint(
   lines.push('');
 
   return lines.join('\n');
-}
-
-function sortFunctionArgs(argsStr: string): string {
-  // Parse function args like "{ pkgs, treefmt-nix, ... }" and sort them alphabetically
-  const match = argsStr.match(/^\{([^}]+)\}$/);
-  if (!match) return argsStr;
-
-  const argsContent = match[1];
-  const args = argsContent.split(',').map((arg) => arg.trim());
-
-  // Sort alphabetically, but keep "..." at the end if present
-  const restIdx = args.indexOf('...');
-  let sortedArgs: string[];
-  if (restIdx !== -1) {
-    const rest = args.splice(restIdx, 1);
-    sortedArgs = [...args.sort(), ...rest];
-  } else {
-    sortedArgs = args.sort();
-  }
-
-  return `{ ${sortedArgs.join(', ')} }`;
 }

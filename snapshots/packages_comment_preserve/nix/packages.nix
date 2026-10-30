@@ -11,7 +11,7 @@ let
 
           # linter
           treefmt
-        ;
+          ;
       }
     );
   };

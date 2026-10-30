@@ -1,13 +1,18 @@
-{ env, packages, pkgs, shellHook }:
+{
+  pkgs,
+  packages,
+  env,
+  shellHook,
+}:
 with env;
 {
   ci = pkgs.mkShell {
-    buildInputs = lint ++ main ++ system;
+    buildInputs = system ++ main ++ lint;
     inherit shellHook;
   };
 
   default = pkgs.mkShell {
-    buildInputs = main ++ system;
+    buildInputs = system ++ main;
     inherit shellHook;
   };
 }

@@ -14,8 +14,11 @@ function merge(...contents: string[]): string {
   return output;
 }
 
+const nixInstantiate = Bun.which('nix-instantiate');
+
 function expectParseableNix(content: string): void {
-  const result = Bun.spawnSync(['nix-instantiate', '--parse', '--expr', content]);
+  if (!nixInstantiate) return;
+  const result = Bun.spawnSync([nixInstantiate, '--parse', '--expr', content]);
   expect(result.exitCode, result.stderr.toString()).toBe(0);
 }
 

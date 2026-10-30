@@ -1,6 +1,7 @@
 // merge-flake.ts — Parser and base-preserving merger for flake.nix files
 
 import { inventoryMaterial, maskNixTrivia } from './loss-guard.ts';
+import { PRINT_WIDTH, compareCodeUnits } from './nix-print.ts';
 
 interface InputEntry {
   name: string;
@@ -811,10 +812,14 @@ function insertMissingPackageInherits(
   return spliceInheritIds(content, semicolon, inheritMatch[1], missing);
 }
 
+/** nixfmt keeps `inherit a b c;` on one line only up to this many names; beyond it, one name per line. */
+const MAX_INLINE_INHERIT_IDS = 3;
+
 /**
- * Add identifiers to an existing `inherit ...;`, matching how the list is already
- * rendered: appended on the same line for a compact list, one per line for the
- * exploded form treefmt produces once the list grows.
+ * Add identifiers to an existing `inherit ...;`. The layout follows nixfmt: a compact list
+ * stays on one line while it holds at most three names and fits the print width, and is
+ * rewritten to the exploded form (one name per line, `;` aligned with the names) once it
+ * grows past that. An already exploded list gets the new names appended in place.
  */
 function spliceInheritIds(
   content: string,
@@ -828,7 +833,15 @@ function spliceInheritIds(
     missing.join(' ') +
     content.slice(semicolon);
 
-  if (!inheritText.includes('\n')) return appendInline();
+  if (!inheritText.includes('\n')) {
+    const exploded = explodeCompactInherit(
+      content,
+      semicolon,
+      inheritText,
+      missing,
+    );
+    return exploded ?? appendInline();
+  }
 
   const semicolonLineStart = content.lastIndexOf('\n', semicolon) + 1;
   const beforeSemicolon = content.slice(semicolonLineStart, semicolon);
@@ -840,6 +853,80 @@ function spliceInheritIds(
     block +
     '\n' +
     content.slice(semicolonLineStart)
+  );
+}
+
+/**
+ * Rewrite a one-line `inherit ...;` as nixfmt's exploded layout when adding `missing`
+ * would leave it with more than three names or past the print width. Returns null when the
+ * inline append is already nixfmt-clean, or the statement is not in a shape this can
+ * safely rewrite (comments in the list, or code sharing its line that is not the braces).
+ */
+function explodeCompactInherit(
+  content: string,
+  semicolon: number,
+  inheritText: string,
+  missing: string[],
+): string | null {
+  if (inheritText.includes('#') || inheritText.includes('/*')) return null;
+  const keyword = content.lastIndexOf('inherit', semicolon);
+  if (
+    keyword < 0 ||
+    content.slice(keyword + 7, semicolon).trim() !== inheritText.trim()
+  )
+    return null;
+
+  const source = inheritText.match(/^\s*(\([^)]*\))/)?.[1] ?? '';
+  const existing = (source ? inheritText.replace(source, '') : inheritText)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const ids = [...existing, ...missing];
+
+  const lineStart = content.lastIndexOf('\n', keyword - 1) + 1;
+  const beforeKeyword = content.slice(lineStart, keyword);
+  const lineEnd = content.indexOf('\n', semicolon);
+  const afterSemicolon = content.slice(
+    semicolon + 1,
+    lineEnd === -1 ? content.length : lineEnd,
+  );
+  const inlineLine =
+    beforeKeyword +
+    `inherit${source ? ` ${source}` : ''} ${ids.join(' ')};` +
+    afterSemicolon;
+  if (
+    ids.length <= MAX_INLINE_INHERIT_IDS &&
+    inlineLine.length <= PRINT_WIDTH
+  )
+    return null;
+
+  const render = (indent: string): string[] => [
+    `${indent}inherit${source ? ` ${source}` : ''}`,
+    ...ids.map((id) => `${indent}  ${id}`),
+    `${indent}  ;`,
+  ];
+
+  if (/^\s*$/.test(beforeKeyword)) {
+    return (
+      content.slice(0, lineStart) +
+      render(beforeKeyword).join('\n') +
+      content.slice(semicolon + 1)
+    );
+  }
+
+  // `{ inherit ...; }` sharing a line with other code: open the braces up as well.
+  const open = content.slice(0, keyword).trimEnd();
+  const close = content.slice(semicolon + 1).match(/^\s*\}/);
+  if (!open.endsWith('{') || !close) return null;
+  const lineIndent = content.slice(lineStart).match(/^[ \t]*/)![0];
+  const innerIndent = `${lineIndent}  `;
+  return (
+    open +
+    '\n' +
+    render(innerIndent).join('\n') +
+    '\n' +
+    lineIndent +
+    content.slice(semicolon + 1 + close[0].length - 1)
   );
 }
 
@@ -1351,14 +1438,14 @@ function mergeInputEntries(parsed: ParsedFlake[]): CommentGroup[] {
 
   const groups: CommentGroup[] = [];
   for (const [label, items] of groupMap) {
-    items.sort((a, b) => a.localeCompare(b));
+    items.sort((a, b) => compareCodeUnits(a, b));
     groups.push({ label, items });
   }
 
   groups.sort((a, b) => {
     if (a.label === '' && b.label !== '') return -1;
     if (a.label !== '' && b.label === '') return 1;
-    return a.label.localeCompare(b.label);
+    return compareCodeUnits(a.label, b.label);
   });
 
   return groups;
@@ -1391,7 +1478,7 @@ function mergeOutputParams(parsed: ParsedFlake[]): CommentGroup[] {
       if (b === 'self') return 1;
       if (a === '...') return 1;
       if (b === '...') return -1;
-      return a.localeCompare(b);
+      return compareCodeUnits(a, b);
     });
     groups.push({ label, items });
   }
@@ -1399,7 +1486,7 @@ function mergeOutputParams(parsed: ParsedFlake[]): CommentGroup[] {
   groups.sort((a, b) => {
     if (a.label === '' && b.label !== '') return -1;
     if (a.label !== '' && b.label === '') return 1;
-    return a.label.localeCompare(b.label);
+    return compareCodeUnits(a.label, b.label);
   });
 
   return groups;

@@ -1,4 +1,8 @@
-{ atomi, pkgs, pkgs-2505 }:
+{
+  pkgs,
+  pkgs-2505,
+  atomi,
+}:
 let
   all = rec {
     atomipkgs = (
@@ -8,7 +12,7 @@ let
           infrautils
           pls
           sg
-        ;
+          ;
       }
     );
 
@@ -20,7 +24,7 @@ let
         inherit
           bun
           git
-        ;
+          ;
       }
     );
 
@@ -29,12 +33,10 @@ let
       {
         inherit
           nodejs
-        ;
+          ;
       }
     );
   };
 in
 with all;
-atomipkgs //
-nix-2505 //
-nix-2511
+atomipkgs // nix-2505 // nix-2511

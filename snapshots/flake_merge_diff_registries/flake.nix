@@ -45,7 +45,12 @@
         with rec {
           packages = import ./nix/packages.nix
             {
-              inherit pkgs-unstable atomi pkgs pkgs-2511;
+              inherit
+                pkgs-unstable
+                atomi
+                pkgs
+                pkgs-2511
+                ;
             };
           env = import ./nix/env.nix {
             inherit pkgs packages;
@@ -66,7 +71,12 @@
           };
         };
         {
-          inherit packages devShells checks formatter;
+          inherit
+            packages
+            devShells
+            checks
+            formatter
+            ;
         }
       )
     )
