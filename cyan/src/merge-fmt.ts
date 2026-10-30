@@ -18,7 +18,7 @@
 //     rather than emitting a file that is missing material.
 
 import { findFunctionHeader, type FunctionHeader } from './loss-guard.ts';
-import { printFunctionHead } from './nix-print.ts';
+import { collapseArgWhitespace, printFunctionHead } from './nix-print.ts';
 
 const FILE = 'nix/fmt.nix';
 
@@ -492,10 +492,10 @@ function canonicalArgs(content: string, header: FunctionHeader): string {
   return all.length === 0 ? '{ }' : `{ ${all.join(', ')} }`;
 }
 
-function sourceOrderArgs(content: string, header: FunctionHeader): string[] {
-  return splitTopLevelCommas(content.slice(header.openIndex + 1, header.closeIndex))
-    .map((part) => part.trim().replace(/\s+/g, ' '))
-    .filter((part) => part.length > 0 && part !== '...');
+function sourceOrderArgs(header: FunctionHeader): string[] {
+  // From the masked split, so a comment line between arguments is dropped rather than
+  // folded into the next argument by a whitespace collapse.
+  return header.args.map((name) => collapseArgWhitespace(header.argSources.get(name) ?? name));
 }
 
 function argName(part: string): string {
@@ -513,7 +513,7 @@ function parseFmt(content: string, label: string): ParsedFmt {
     );
   }
   const functionArgs = canonicalArgs(content, header);
-  const argList = sourceOrderArgs(content, header);
+  const argList = sourceOrderArgs(header);
 
   const letIndex = findKeyword(code, header.colonIndex + 1, 'let');
   if (letIndex === -1) {

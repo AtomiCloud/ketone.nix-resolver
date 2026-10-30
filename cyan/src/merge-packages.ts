@@ -1,7 +1,7 @@
 // merge-packages.ts — Parser, merger, and pretty-printer for packages.nix files
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
-import { compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
+import { collapseArgWhitespace, compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
 
 interface InheritIdentifier {
   id: string;
@@ -435,7 +435,7 @@ export function mergePackages(
     for (const arg of p.functionArgs) {
       // Highest layer wins, consistent with every other LWW axis in this merger.
       const source = p.argSources.get(arg);
-      if (source !== undefined) argSources.set(arg, source.replace(/\s+/g, ' '));
+      if (source !== undefined) argSources.set(arg, collapseArgWhitespace(source));
     }
     if (p.hasEllipsis) hasEllipsis = true;
   }

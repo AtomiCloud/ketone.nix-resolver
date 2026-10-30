@@ -6,6 +6,7 @@ import { mergePrecommit } from './cyan/src/merge-precommit.ts';
 import { mergePackages } from './cyan/src/merge-packages.ts';
 import { mergeShells } from './cyan/src/merge-shells.ts';
 import { withLossGuard, type MergeFn } from './cyan/src/loss-guard.ts';
+import { compareCodeUnits } from './cyan/src/nix-print.ts';
 
 // Every merger is wrapped in the @3 loss-refusal invariant. Wrapping the table rather
 // than each merger's body is deliberate: a merger added here later cannot forget it, and
@@ -37,7 +38,7 @@ export async function resolver(input: ResolverInput): Promise<ResolverOutput> {
   // Sort for commutativity (layer ascending, then template name)
   const sorted = [...files].sort((a, b) => {
     if (a.origin.layer !== b.origin.layer) return a.origin.layer - b.origin.layer;
-    return a.origin.template.localeCompare(b.origin.template);
+    return compareCodeUnits(a.origin.template, b.origin.template);
   });
 
   // Extract basename and dispatch

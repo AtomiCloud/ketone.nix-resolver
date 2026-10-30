@@ -1,7 +1,7 @@
 // merge-precommit.ts — Parser, merger, and pretty-printer for pre-commit.nix files
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
-import { compareCodeUnits, orderedUnion, printFunctionHead } from './nix-print.ts';
+import { collapseArgWhitespace, compareCodeUnits, orderedUnion, printFunctionHead } from './nix-print.ts';
 
 interface HookConfig {
   enable: boolean;
@@ -212,11 +212,17 @@ function parsePrelude(raw: string): ParsedPrelude {
   };
 }
 
+/** The comment text in `gap` (only whitespace and comments), whole and re-based to column 0. */
 function commentLines(gap: string): string[] {
-  return gap
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('#') || line.startsWith('/*') || line.startsWith('*'));
+  const trimmed = gap.trim();
+  if (trimmed === '') return [];
+  const offset = gap.length - gap.trimStart().length;
+  const startColumn = offset - (gap.lastIndexOf('\n', offset - 1) + 1);
+  return trimmed.split('\n').map((line, index) => {
+    if (index === 0) return line.trimEnd();
+    if (line.trim() === '') return '';
+    return line.slice(Math.min(startColumn, line.match(/^[ \t]*/)![0].length)).trimEnd();
+  });
 }
 
 function addLetStatement(text: string, code: string, start: number, end: number, out: Map<string, LetBinding>): void {
@@ -262,7 +268,7 @@ function addLetStatement(text: string, code: string, start: number, end: number,
 }
 
 function printLetBinding(binding: LetBinding): string[] {
-  const lines = binding.comment.map((c) => `  ${c}`);
+  const lines = binding.comment.map((c) => (c ? `  ${c}` : ''));
   // Continuation lines move by the same amount the statement's first line did, so a
   // binding written at another indent still lands at the two-space let indent.
   const shift = 2 - binding.indent;
@@ -297,6 +303,11 @@ function bracketDepth(text: string): number {
     else if (char === ']' || char === ')' || char === '}') depth--;
   }
   return depth;
+}
+
+/** True once `text` has closed every bracket and ends at a `;` — the end of a binding. */
+function statementComplete(text: string): boolean {
+  return bracketDepth(text) <= 0 && maskNixTrivia(text).trimEnd().endsWith(';');
 }
 
 function parseHooks(blockContent: string): Map<string, HookConfig> {
@@ -506,14 +517,14 @@ function parseHooks(blockContent: string): Map<string, HookConfig> {
         continue;
       }
 
-      // A value that spans lines (`entry = validators [ ... ];`, a multi-line call or attrset):
+      // A value that spans lines (`entry = validators [ ... ];`, `args = [ ... ] ++ extra;`, an indented string):
       // keep the whole statement verbatim, re-indented relative to its key. The single-line
       // passthrough below would keep only the first line and emit broken Nix.
       const openField = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*=\s*(\S[\s\S]*)$/);
-      if (openField && bracketDepth(trimmed) > 0) {
+      if (openField && !statementComplete(trimmed)) {
         const keyIndent = line.length - line.trimStart().length;
         const statement = [trimmed];
-        while (lineIndex + 1 < lines.length && bracketDepth(statement.join('\n')) > 0) {
+        while (lineIndex + 1 < lines.length && !statementComplete(statement.join('\n'))) {
           lineIndex++;
           const next = lines[lineIndex];
           const nextIndent = next.length - next.trimStart().length;
@@ -564,7 +575,7 @@ export function mergePrecommit(
   // layer wins, so a `?` default survives.
   const argSources = new Map<string, string>();
   for (const p of parsed) {
-    for (const name of p.argNames) argSources.set(name, (p.argSources.get(name) ?? name).replace(/\s+/g, ' '));
+    for (const name of p.argNames) argSources.set(name, collapseArgWhitespace(p.argSources.get(name) ?? name));
   }
   const functionArgs = orderedUnion(parsed.map((p) => p.argNames)).map((name) => argSources.get(name) ?? name);
   const hasEllipsis = parsed.some((p) => p.hasEllipsis);
@@ -706,7 +717,7 @@ function prettyPrint(
     for (const comment of prelude.leadingComment) lines.push(comment);
     lines.push('let');
     for (const binding of prelude.bindings.values()) lines.push(...printLetBinding(binding));
-    for (const comment of prelude.trailingComment) lines.push(`  ${comment}`);
+    for (const comment of prelude.trailingComment) lines.push(comment ? `  ${comment}` : '');
     lines.push('in');
   }
   if (prelude.rest) {

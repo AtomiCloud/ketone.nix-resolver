@@ -317,3 +317,115 @@ ${hook}
     expect(run('nix/pre-commit.nix', mergePrecommit, once)).toBe(once);
   });
 });
+
+describe('review fixes', () => {
+  const pcHead = (head: string) => `${head}let
+  extraArgs = [ ];
+in
+pre-commit-lib.run {
+  src = ./.;
+
+  hooks = {
+    a.enable = true;
+  };
+}
+`;
+  const stdHead = `{
+  packages,
+  pre-commit-lib,
+  formatter,
+}:
+`;
+
+  test('#1 a string default with a double space survives in the pre-commit head', () => {
+    const input = pcHead(`{
+  packages,
+  pre-commit-lib,
+  sep ? "a  b",
+}:
+`);
+    const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+    expect(output).toContain('sep ? "a  b"');
+    expectParseableNix(output);
+  });
+
+  test('#2 a hook list continued with ++ keeps the continuation', () => {
+    const input = `${stdHead}let
+  extraArgs = [ ];
+in
+pre-commit-lib.run {
+  src = ./.;
+
+  hooks = {
+    custom = {
+      enable = true;
+      args = [
+        "--one"
+        "--two"
+      ]
+      ++ extraArgs;
+      language = "system";
+    };
+  };
+}
+`;
+    const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+    expect(output).toContain('++ extraArgs;');
+    expect(output).toContain('language = "system";');
+    expectParseableNix(output);
+  });
+
+  test('#3 an fmt head with a comment line between args keeps the comment', () => {
+    const input = `{
+  pkgs,
+  # the formatter lib
+  treefmt-nix,
+  ...
+}:
+let
+  fmt = {
+    projectRootFile = "flake.nix";
+  };
+in
+(treefmt-nix.mkWrapper pkgs fmt)
+`;
+    const output = run('nix/fmt.nix', mergeFmt, input, input);
+    expect(output).toContain('treefmt-nix');
+    expectParseableNix(output);
+  });
+
+  test('#4 a block comment in the let prelude keeps its body lines', () => {
+    const input = `${stdHead}let
+  /* helper used by
+     the lint hook */
+  runtime = "x";
+in
+pre-commit-lib.run {
+  src = ./.;
+
+  hooks = {
+    a.enable = true;
+  };
+}
+`;
+    const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+    expect(output).toContain('helper used by');
+    expect(output).toContain('the lint hook');
+    expectParseableNix(output);
+  });
+
+  test('#7 same-layer ties order by code unit, not by locale', async () => {
+    const { resolver } = await import('../index.ts');
+    const file = (template: string, content: string) => ({
+      path: 'nix/pre-commit.nix',
+      content,
+      origin: { template, layer: 0 },
+    });
+    // 'Z' (90) sorts before 'a' (97) by code unit, so 'alpha' is the later (highest) tie and wins;
+    // localeCompare would put 'alpha' first and let 'Zeta' win.
+    const forward = await resolver({ files: [file('Zeta', PRECOMMIT_A), file('alpha', PRECOMMIT_B)] } as never);
+    const backward = await resolver({ files: [file('alpha', PRECOMMIT_B), file('Zeta', PRECOMMIT_A)] } as never);
+    expect(forward.content).toBe(backward.content);
+    expect(forward.content).toContain('runtime = "low";');
+  });
+});

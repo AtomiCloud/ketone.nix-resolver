@@ -74,3 +74,35 @@ export function printOperatorChain(
   });
   return lines;
 }
+
+/** Collapses whitespace runs to one space, leaving the inside of `"..."` and `''...''` strings untouched. */
+export function collapseArgWhitespace(source: string): string {
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== '"') j += source[j] === '\\' ? 2 : 1;
+      out += source.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === "'" && source[i + 1] === "'") {
+      let j = i + 2;
+      while (j < source.length) {
+        if (source[j] === "'" && source[j + 1] === "'") {
+          if (source[j + 2] === "'" || source[j + 2] === '$' || source[j + 2] === '\\') j += 3;
+          else break;
+        } else j += 1;
+      }
+      out += source.slice(i, j + 2);
+      i = j + 2;
+    } else if (/\s/.test(ch)) {
+      while (i < source.length && /\s/.test(source[i])) i += 1;
+      out += ' ';
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}

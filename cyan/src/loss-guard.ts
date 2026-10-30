@@ -35,7 +35,7 @@ function spacesLike(value: string): string {
  * offsets. Without this a commented-out `# foo = bar` or a shell fragment inside an
  * `entry = "..."` string would count as material the merger was asked to carry.
  */
-export function maskNixTrivia(source: string): string {
+export function maskNixTrivia(source: string, options: { keepStrings?: boolean } = {}): string {
   let output = '';
   let index = 0;
 
@@ -64,7 +64,7 @@ export function maskNixTrivia(source: string): string {
         stop++;
         if (source[stop - 1] === '"') break;
       }
-      output += spacesLike(source.slice(index, stop));
+      output += options.keepStrings ? source.slice(index, stop) : spacesLike(source.slice(index, stop));
       index = stop;
       continue;
     }
@@ -91,7 +91,7 @@ export function maskNixTrivia(source: string): string {
         scan++;
       }
       const stop = Math.min(scan, source.length);
-      output += spacesLike(source.slice(index, stop));
+      output += options.keepStrings ? source.slice(index, stop) : spacesLike(source.slice(index, stop));
       index = stop;
       continue;
     }
@@ -195,6 +195,9 @@ export function findFunctionHeader(source: string): FunctionHeader | null {
   // cannot split an argument, but slice the *source* so defaults keep their real bytes.
   const bodyStart = open + 1;
   const masked = code.slice(bodyStart, close);
+  // Comments blanked but strings kept: an argument's source ends at its last real token, which
+  // can be a string literal (`sep ? "a  b"`) that `masked` has already blanked.
+  const commentFree = maskNixTrivia(source, { keepStrings: true });
   const args: string[] = [];
   const argSources = new Map<string, string>();
   let hasEllipsis = false;
@@ -212,8 +215,9 @@ export function findFunctionHeader(source: string): FunctionHeader | null {
     if (name === undefined) continue;
     const leading = maskedPart.length - maskedPart.trimStart().length;
     const from = bodyStart + start + leading;
+    const end = bodyStart + start + commentFree.slice(bodyStart + start, bodyStart + start + maskedPart.length).trimEnd().length;
     if (!argSources.has(name)) args.push(name);
-    argSources.set(name, source.slice(from, from + trimmed.length));
+    argSources.set(name, source.slice(from, end));
   }
 
   return {

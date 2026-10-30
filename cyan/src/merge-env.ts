@@ -1,7 +1,7 @@
 // merge-env.ts — Parser, merger, and pretty-printer for env.nix files
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
-import { printFunctionHead } from './nix-print.ts';
+import { collapseArgWhitespace, printFunctionHead } from './nix-print.ts';
 
 interface ParsedEnv {
   functionArgs: string;
@@ -39,7 +39,7 @@ function parseEnv(content: string): ParsedEnv {
   // Emitted from each argument's own source text, so a default (`pkgs ? import <nixpkgs> {}`)
   // survives the round trip. Rebuilding from names alone would drop it silently, and no
   // *name* would be missing for the loss guard to catch.
-  const renderedArgs = header.args.map((name) => (header.argSources.get(name) ?? name).replace(/\s+/g, ' '));
+  const renderedArgs = header.args.map((name) => collapseArgWhitespace(header.argSources.get(name) ?? name));
   const functionArgs = `{ ${renderedArgs.join(', ')}${header.hasEllipsis ? ', ...' : ''} }`;
   // Compared as a sorted list of whole arguments, never by re-splitting the rendered
   // string on commas — a default may itself contain a comma.

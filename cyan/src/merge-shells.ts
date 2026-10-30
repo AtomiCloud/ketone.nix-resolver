@@ -18,7 +18,7 @@
 // and string literals masked out, and refuses on any shape it cannot account for.
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
-import { compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
+import { collapseArgWhitespace, compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
 
 interface ParsedShell {
   buildInputs: string[];
@@ -262,7 +262,7 @@ export function mergeShells(
   // Compared on the whole argument text, not just the name, so a differing `?` default is
   // a conflict rather than something the first layer silently imposes on the rest.
   const rendered = (p: ParsedShells): string[] =>
-    p.functionArgs.map((name) => (p.argSources.get(name) ?? name).replace(/\s+/g, ' '));
+    p.functionArgs.map((name) => collapseArgWhitespace(p.argSources.get(name) ?? name));
   const signature = (p: ParsedShells): string =>
     `{ ${[...rendered(p)].sort().join(', ')}${p.hasEllipsis ? ', ...' : ''} }`;
   const firstSignature = signature(parsed[0]);
