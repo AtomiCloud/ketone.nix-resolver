@@ -10,8 +10,8 @@ import { mergeShells } from '../cyan/src/merge-shells.ts';
 /*
  * U1/U2/U3/U5 — merged Nix must parse AND be nixfmt-clean, and keep the highest layer's
  * ordering. Every input below is itself nixfmt-clean, so any `nixfmt --check` failure is the
- * merger's printer. The nixfmt checks skip when nixfmt is not on PATH; the parse checks and
- * the structural assertions always run.
+ * merger's printer. The nixfmt and parse checks skip when their tools are not on PATH; the
+ * structural assertions always run.
  */
 
 type Merge = (files: { content: string; layer: number; template: string }[]) => string;
@@ -22,8 +22,11 @@ function run(file: string, merge: Merge, ...contents: string[]): string {
   return output;
 }
 
+const nixInstantiate = Bun.which('nix-instantiate');
+
 function expectParseableNix(content: string): void {
-  const result = Bun.spawnSync(['nix-instantiate', '--parse', '--expr', content]);
+  if (!nixInstantiate) return;
+  const result = Bun.spawnSync([nixInstantiate, '--parse', '--expr', content]);
   expect(result.exitCode, result.stderr.toString()).toBe(0);
 }
 
@@ -448,6 +451,29 @@ pre-commit-lib.run {
       expect(output).not.toMatch(/^ {3}#/m);
       expectNixfmtClean(output);
     }
+  });
+
+  test('a with/assert prelude inside a let binding value does not end the binding', () => {
+    const input = `{
+  pkgs,
+  pre-commit-lib,
+}:
+let
+  tools = with pkgs; [ a b ];
+  checked = assert true; "ok";
+in
+pre-commit-lib.run {
+  src = ./.;
+
+  hooks = {
+    a.enable = true;
+  };
+}
+`;
+    const output = run('nix/pre-commit.nix', mergePrecommit, input, input);
+    expect(output).toContain('tools = with pkgs; [ a b ];');
+    expect(output).toContain('checked = assert true; "ok";');
+    expectParseableNix(output);
   });
 
   test('#7 same-layer ties order by code unit, not by locale', async () => {

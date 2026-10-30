@@ -185,15 +185,26 @@ function parsePrelude(raw: string): ParsedPrelude {
   let cursor = bodyStart;
   let bracket = 0;
   let letDepth = 0;
+  let pendingPreludes = 0;
   let statementStart = bodyStart;
   for (let i = bodyStart; i < inIndex; i++) {
     const word = nested.get(i);
     if (word === 'let') letDepth++;
     else if (word === 'in') letDepth--;
     const ch = code[i];
+    // A `with x;` / `assert x;` prelude inside a binding value owns the next top-level `;`.
+    if (bracket === 0 && letDepth === 0 && !/[\w'.-]/.test(code[i - 1] ?? '') && /^(?:with|assert)(?![\w'-])/.test(code.slice(i, i + 7))) {
+      pendingPreludes++;
+      i += code.startsWith('with', i) ? 3 : 5;
+      continue;
+    }
     if (ch === '{' || ch === '[' || ch === '(') bracket++;
     else if (ch === '}' || ch === ']' || ch === ')') bracket--;
     else if (ch === ';' && bracket === 0 && letDepth === 0) {
+      if (pendingPreludes > 0) {
+        pendingPreludes--;
+        continue;
+      }
       addLetStatement(text, code, statementStart, i + 1, bindings);
       statementStart = i + 1;
       cursor = i + 1;

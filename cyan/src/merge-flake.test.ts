@@ -12,9 +12,12 @@ async function readFixture(name: 'workspace' | 'bun-base'): Promise<string> {
   return Bun.file(join(fixtureRoot, name, 'flake.nix')).text();
 }
 
+const nixInstantiate = Bun.which('nix-instantiate');
+
 function expectParseableNix(content: string): void {
+  if (!nixInstantiate) return;
   const result = Bun.spawnSync([
-    'nix-instantiate',
+    nixInstantiate,
     '--parse',
     '--expr',
     content,
