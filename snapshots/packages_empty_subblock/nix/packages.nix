@@ -1,4 +1,8 @@
-{ atomi, pkgs, pkgs-2505 }:
+{
+  pkgs,
+  pkgs-2505,
+  atomi,
+}:
 let
   all = rec {
     atomipkgs = (
@@ -8,7 +12,7 @@ let
           infrautils
           pls
           sg
-        ;
+          ;
       }
     );
 
@@ -20,5 +24,4 @@ let
   };
 in
 with all;
-atomipkgs //
-nix-2505
+atomipkgs // nix-2505

@@ -1,9 +1,13 @@
 // merge-env.ts — Parser, merger, and pretty-printer for env.nix files
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
+import { printFunctionHead } from './nix-print.ts';
 
 interface ParsedEnv {
   functionArgs: string;
+  /** Whole argument texts in source order, and whether the head ends in `...`. */
+  renderedArgs: string[];
+  hasEllipsis: boolean;
   /** Sorted argument source texts — the order-independent identity of the head. */
   argSignature: string;
   withPackages: boolean;
@@ -124,7 +128,14 @@ function parseEnv(content: string): ParsedEnv {
     );
   }
 
-  return { functionArgs, argSignature, withPackages, categories };
+  return {
+    functionArgs,
+    renderedArgs,
+    hasEllipsis: header.hasEllipsis,
+    argSignature,
+    withPackages,
+    categories,
+  };
 }
 
 // ─── Merge ───────────────────────────────────────────────────────────────────
@@ -176,20 +187,22 @@ export function mergeEnv(
     }
   }
 
-  return prettyPrint(firstArgs, firstWith, mergedCategories);
+  const highest = parsed[parsed.length - 1];
+  return prettyPrint(highest.renderedArgs, highest.hasEllipsis, firstWith, mergedCategories);
 }
 
 // ─── Pretty Print ────────────────────────────────────────────────────────────
 
 function prettyPrint(
-  functionArgs: string,
+  renderedArgs: string[],
+  hasEllipsis: boolean,
   withPackages: boolean,
   categories: Map<string, Set<string>>,
 ): string {
   const lines: string[] = [];
 
   // Function args
-  lines.push(`${functionArgs}:`);
+  lines.push(...printFunctionHead(renderedArgs, hasEllipsis));
   if (withPackages) {
     lines.push('with packages;');
   }

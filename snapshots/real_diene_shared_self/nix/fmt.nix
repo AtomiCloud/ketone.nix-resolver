@@ -1,4 +1,4 @@
-{ pkgs, treefmt-nix, ... }:
+{ treefmt-nix, pkgs, ... }:
 let
   fmt = {
     projectRootFile = "flake.nix";

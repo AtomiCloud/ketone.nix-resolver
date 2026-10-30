@@ -187,7 +187,7 @@ describe('regression: the two @2 defects the diene cascade hit', () => {
     ].join('\n');
 
     const merged = await resolver({ files: [variation('nix/packages.nix', content)] } as never);
-    expect(merged.content).toStartWith('{ atomi, pkgs-2605, pkgs-unstable }:');
+    expect(merged.content).toStartWith('{\n  atomi,\n  pkgs-2605,\n  pkgs-unstable,\n}:\n');
     expect(merged.content).not.toContain('{  }:');
   });
 
@@ -211,7 +211,8 @@ describe('regression: the two @2 defects the diene cascade hit', () => {
     ].join('\n');
 
     const merged = await resolver({ files: [variation('nix/shells.nix', content)] } as never);
-    expect(merged.content).toStartWith('{ env, packages, pkgs, shellHook }:\nwith env;\n');
+    // nixfmt expands a head of 3+ arguments; the source order (pkgs, packages, env, ...) is kept.
+    expect(merged.content).toStartWith('{\n  pkgs,\n  packages,\n  env,\n  shellHook,\n}:\nwith env;\n');
     expect(merged.content).toContain('inherit shellHook;');
     expect(merged.content).toContain('buildInputs = main ++ system;');
   });
@@ -287,7 +288,8 @@ describe('review findings — CodeRabbit, PR #10', () => {
     // explicit check can.
     const content = '{ packages, pkgs ? import <nixpkgs> { } }:\nwith packages;\n{\n  dev = [\n    git\n  ];\n}\n';
     const merged = await resolver({ files: [variation('nix/env.nix', content)] } as never);
-    expect(merged.content).toStartWith('{ packages, pkgs ? import <nixpkgs> { } }:');
+    // nixfmt expands any head that carries a default.
+    expect(merged.content).toStartWith('{\n  packages,\n  pkgs ? import <nixpkgs> { },\n}:\n');
   });
 
   test('a single-line category list keeps its items and closes the category', async () => {

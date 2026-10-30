@@ -379,7 +379,9 @@ describe('mergeFlake outputs binding and comment preservation', () => {
         '          shellHook = checks.pre-commit-check.shellHook;\n' +
         '        };',
     );
-    expect(output).toContain('inherit packages devShells checks formatter;');
+    expect(output).toContain(
+      '        inherit\n          packages\n          devShells\n          checks\n          formatter\n          ;',
+    );
 
     // The base is otherwise untouched, and the spliced result is a fixed point.
     expect(output.startsWith(higher.slice(0, higher.indexOf('with rec')))).toBe(

@@ -18,6 +18,7 @@
 //     rather than emitting a file that is missing material.
 
 import { findFunctionHeader, type FunctionHeader } from './loss-guard.ts';
+import { printFunctionHead } from './nix-print.ts';
 
 const FILE = 'nix/fmt.nix';
 
@@ -47,7 +48,11 @@ interface ProgramModel {
 }
 
 interface ParsedFmt {
+  /** Canonical sorted head text — used only to check the layers agree. */
   functionArgs: string;
+  /** Whole argument texts in source order — what gets printed. */
+  argList: string[];
+  hasEllipsis: boolean;
   /** Raw value text of `projectRootFile`, e.g. `"flake.nix"`. */
   projectRootFile: string;
   projectRootFileComment?: string;
@@ -487,6 +492,12 @@ function canonicalArgs(content: string, header: FunctionHeader): string {
   return all.length === 0 ? '{ }' : `{ ${all.join(', ')} }`;
 }
 
+function sourceOrderArgs(content: string, header: FunctionHeader): string[] {
+  return splitTopLevelCommas(content.slice(header.openIndex + 1, header.closeIndex))
+    .map((part) => part.trim().replace(/\s+/g, ' '))
+    .filter((part) => part.length > 0 && part !== '...');
+}
+
 function argName(part: string): string {
   return part.match(/^([a-zA-Z_][a-zA-Z0-9_'-]*)/)?.[1] ?? part;
 }
@@ -502,6 +513,7 @@ function parseFmt(content: string, label: string): ParsedFmt {
     );
   }
   const functionArgs = canonicalArgs(content, header);
+  const argList = sourceOrderArgs(content, header);
 
   const letIndex = findKeyword(code, header.colonIndex + 1, 'let');
   if (letIndex === -1) {
@@ -581,6 +593,8 @@ function parseFmt(content: string, label: string): ParsedFmt {
 
   return {
     functionArgs,
+    argList,
+    hasEllipsis: header.hasEllipsis,
     projectRootFile,
     projectRootFileComment,
     programs,
@@ -659,6 +673,8 @@ export function mergeFmt(
   const highest = parsed[parsed.length - 1];
   return prettyPrint({
     functionArgs,
+    argList: highest.argList,
+    hasEllipsis: highest.hasEllipsis,
     projectRootFile: highest.projectRootFile,
     projectRootFileComment: lastDefined(parsed.map((p) => p.projectRootFileComment)),
     programs,
@@ -732,7 +748,7 @@ function renderProgram(name: string, program: ProgramModel): string[] {
 function prettyPrint(model: ParsedFmt): string {
   const lines: string[] = [];
 
-  lines.push(`${model.functionArgs}:`);
+  lines.push(...printFunctionHead(model.argList, model.hasEllipsis));
   lines.push('let');
   if (model.letPrefix) lines.push(...reindent(model.letPrefix, '  '));
   lines.push('  fmt = {');

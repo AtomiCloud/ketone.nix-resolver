@@ -18,6 +18,7 @@
 // and string literals masked out, and refuses on any shape it cannot account for.
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
+import { compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
 
 interface ParsedShell {
   buildInputs: string[];
@@ -284,22 +285,27 @@ export function mergeShells(
   }
 
   // Merge shells: per shell name, union buildInputs and union inherited identifiers.
-  const mergedInputs = new Map<string, Set<string>>();
+  // buildInputs order is PATH order, so it is never re-sorted: the highest layer's order
+  // is kept and items only a lower layer has are appended.
+  const inputLayers = new Map<string, string[][]>();
   const mergedInherits = new Map<string, Set<string>>();
 
   for (const p of parsed) {
     for (const [name, shell] of p.shells) {
-      if (!mergedInputs.has(name)) {
-        mergedInputs.set(name, new Set());
+      if (!inputLayers.has(name)) {
+        inputLayers.set(name, []);
         mergedInherits.set(name, new Set());
       }
-      for (const input of shell.buildInputs) mergedInputs.get(name)!.add(input);
+      inputLayers.get(name)!.push(shell.buildInputs);
       for (const identifier of shell.inherits) mergedInherits.get(name)!.add(identifier);
     }
   }
+  const mergedInputs = new Map<string, string[]>(
+    [...inputLayers].map(([name, layers]) => [name, orderedUnion(layers)]),
+  );
 
   return prettyPrint(
-    [...rendered(parsed[0])].sort(),
+    orderedUnion(parsed.map(rendered)),
     parsed[0].hasEllipsis,
     parsed[0].preludes,
     mergedInputs,
@@ -313,26 +319,24 @@ function prettyPrint(
   functionArgs: string[],
   hasEllipsis: boolean,
   preludes: string[],
-  shells: Map<string, Set<string>>,
+  shells: Map<string, string[]>,
   inherits: Map<string, Set<string>>,
 ): string {
   const lines: string[] = [];
 
-  // Function args sorted alphabetically, with `...` last
-  const headArgs = hasEllipsis ? [...functionArgs, '...'] : functionArgs;
-  lines.push(`{ ${headArgs.join(', ')} }:`);
+  lines.push(...printFunctionHead(functionArgs, hasEllipsis));
   for (const prelude of preludes) {
     lines.push(`with ${prelude};`);
   }
 
   lines.push('{');
 
-  const sortedShellNames = [...shells.keys()].sort();
+  const sortedShellNames = [...shells.keys()].sort(compareCodeUnits);
 
   for (let si = 0; si < sortedShellNames.length; si++) {
     const shellName = sortedShellNames[si];
-    const buildInputs = [...shells.get(shellName)!].sort();
-    const shellInherits = [...(inherits.get(shellName) ?? new Set<string>())].sort();
+    const buildInputs = shells.get(shellName)!;
+    const shellInherits = [...(inherits.get(shellName) ?? new Set<string>())].sort(compareCodeUnits);
 
     // Blank line between shells (not before first)
     if (si > 0) {
@@ -340,7 +344,8 @@ function prettyPrint(
     }
 
     lines.push(`  ${shellName} = pkgs.mkShell {`);
-    lines.push(`    buildInputs = ${buildInputs.length === 0 ? '[]' : buildInputs.join(' ++ ')};`);
+    if (buildInputs.length === 0) lines.push('    buildInputs = [ ];');
+    else lines.push(...printOperatorChain('    ', 'buildInputs =', buildInputs, '++', ';'));
     if (shellInherits.length > 0) {
       lines.push(`    inherit ${shellInherits.join(' ')};`);
     }

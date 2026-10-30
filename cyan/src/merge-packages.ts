@@ -1,6 +1,7 @@
 // merge-packages.ts — Parser, merger, and pretty-printer for packages.nix files
 
 import { findFunctionHeader, maskNixTrivia } from './loss-guard.ts';
+import { compareCodeUnits, orderedUnion, printFunctionHead, printOperatorChain } from './nix-print.ts';
 
 interface InheritIdentifier {
   id: string;
@@ -425,21 +426,20 @@ export function mergePackages(
   }
   const parsed = sortedFiles.map((f) => parsePackages(f.content));
 
-  // Function args: concat all, dedupe, sort. `...` is not an argument name — it is a
-  // property of the head — so it is tracked separately and always rendered last.
-  const allArgs = new Set<string>();
+  // Function args: union, keeping the highest layer's order and appending args only a lower
+  // layer has. `...` is not an argument name — it is a property of the head — so it is
+  // tracked separately and always rendered last.
   const argSources = new Map<string, string>();
   let hasEllipsis = false;
   for (const p of parsed) {
     for (const arg of p.functionArgs) {
-      allArgs.add(arg);
       // Highest layer wins, consistent with every other LWW axis in this merger.
       const source = p.argSources.get(arg);
       if (source !== undefined) argSources.set(arg, source.replace(/\s+/g, ' '));
     }
     if (p.hasEllipsis) hasEllipsis = true;
   }
-  const functionArgs = [...allArgs].sort().map((name) => argSources.get(name) ?? name);
+  const functionArgs = orderedUnion(parsed.map((p) => p.functionArgs)).map((name) => argSources.get(name) ?? name);
 
   // Sub-blocks: merge by name
   const mergedBlocks = new Map<string, SubBlock>();
@@ -509,7 +509,7 @@ export function mergePackages(
   for (const [name, inheritMap] of inheritIdMaps) {
     const block = mergedBlocks.get(name);
     if (block && inheritMap.size > 0) {
-      const sorted = [...inheritMap.values()].sort((a, b) => a.id.localeCompare(b.id));
+      const sorted = [...inheritMap.values()].sort((a, b) => compareCodeUnits(a.id, b.id));
       block.entries.push({ type: 'inherit', identifiers: sorted });
     }
   }
@@ -521,7 +521,7 @@ export function mergePackages(
       mergeNames.add(name);
     }
   }
-  const mergeLine = [...mergeNames].sort();
+  const mergeLine = [...mergeNames].sort(compareCodeUnits);
 
   return prettyPrint(functionArgs, hasEllipsis, mergedBlocks, mergeLine);
 }
@@ -536,14 +536,12 @@ function prettyPrint(
 ): string {
   const lines: string[] = [];
 
-  // Function args sorted alphabetically, with `...` last if any input had it
-  const headArgs = hasEllipsis ? [...functionArgs, '...'] : functionArgs;
-  lines.push(`{ ${headArgs.join(', ')} }:`);
+  lines.push(...printFunctionHead(functionArgs, hasEllipsis));
   lines.push('let');
   lines.push('  all = rec {');
 
   // Sub-blocks sorted alphabetically
-  const sortedBlockNames = [...subBlocks.keys()].sort();
+  const sortedBlockNames = [...subBlocks.keys()].sort(compareCodeUnits);
 
   for (let bi = 0; bi < sortedBlockNames.length; bi++) {
     const blockName = sortedBlockNames[bi];
@@ -555,7 +553,7 @@ function prettyPrint(
     }
 
     // Separate assignments from inherits
-    const assignments = block.entries.filter((e) => e.type === 'assignment').sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    const assignments = block.entries.filter((e) => e.type === 'assignment').sort((a, b) => compareCodeUnits(a.name ?? '', b.name ?? ''));
     const inherits = block.entries.filter((e) => e.type === 'inherit');
 
     // Collect inherit identifiers (deduplicated by id, sorted)
@@ -565,7 +563,7 @@ function prettyPrint(
         inheritIdMap.set(ident.id, ident);
       }
     }
-    const sortedInheritIds = [...inheritIdMap.values()].sort((a, b) => a.id.localeCompare(b.id));
+    const sortedInheritIds = [...inheritIdMap.values()].sort((a, b) => compareCodeUnits(a.id, b.id));
 
     // Block opening
     lines.push(`    ${blockName} = (`);
@@ -613,7 +611,7 @@ function prettyPrint(
         }
         lines.push(`          ${ident.id}`);
       }
-      lines.push('        ;');
+      lines.push('          ;');
     }
 
     // Block closing
@@ -627,14 +625,8 @@ function prettyPrint(
   lines.push('in');
   lines.push('with all;');
 
-  // Final merge line
-  for (let mi = 0; mi < mergeLine.length; mi++) {
-    if (mi === mergeLine.length - 1) {
-      lines.push(mergeLine[mi]);
-    } else {
-      lines.push(`${mergeLine[mi]} //`);
-    }
-  }
+  // Final merge line: one line when it fits, nixfmt's leading-operator layout otherwise.
+  lines.push(...printOperatorChain('', '', mergeLine, '//', ''));
 
   lines.push('');
 

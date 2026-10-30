@@ -1,4 +1,10 @@
-{ env, formatter, packages, pkgs, pre-commit-lib }:
+{
+  packages,
+  formatter,
+  pkgs,
+  pre-commit-lib,
+  env,
+}:
 let
   # toolchain-smoke asserts the DECLARED env lists actually provide their binaries.
   envPath = pkgs.lib.makeBinPath (env.system ++ env.main ++ env.lint ++ env.dev);

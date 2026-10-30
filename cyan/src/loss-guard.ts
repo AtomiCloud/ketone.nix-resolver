@@ -17,6 +17,7 @@
 // `dotnet = dotnet-sdk_9;`) is the resolver's documented conflict semantics, and the
 // binding `dotnet` itself still has to survive. What may never happen is a name — an
 // argument, a prelude, an inherit, an attribute — vanishing without a word.
+import { compareCodeUnits } from './nix-print.ts';
 
 export interface MaterialInventory {
   args: Set<string>;
@@ -324,7 +325,7 @@ function lostUnits(inputs: string[], output: string): LostUnit[] {
     }
   }
 
-  lost.sort((a, b) => (a.kind === b.kind ? a.value.localeCompare(b.value) : a.kind.localeCompare(b.kind)));
+  lost.sort((a, b) => (a.kind === b.kind ? compareCodeUnits(a.value, b.value) : compareCodeUnits(a.kind, b.kind)));
   return lost;
 }
 

@@ -1,4 +1,8 @@
-{ formatter, packages, pre-commit-lib }:
+{
+  formatter,
+  packages,
+  pre-commit-lib,
+}:
 pre-commit-lib.run {
   src = ./.;
 
